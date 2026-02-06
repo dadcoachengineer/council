@@ -1,5 +1,5 @@
 import { render } from 'preact';
-import { useState, useEffect, useCallback } from 'preact/hooks';
+import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import { SessionList } from './components/SessionList.js';
 import { SessionView } from './components/SessionView.js';
 import { DecisionReview } from './components/DecisionReview.js';
@@ -17,7 +17,8 @@ function App() {
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [events, setEvents] = useState<IncomingEvent[]>([]);
   const [agents, setAgents] = useState<AgentStatusType[]>([]);
-  const [ws, setWs] = useState<WebSocket | null>(null);
+  const [wsConnected, setWsConnected] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
 
   // Fetch initial data
   const fetchSessions = useCallback(async () => {
@@ -49,44 +50,63 @@ function App() {
 
   // WebSocket connection
   useEffect(() => {
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${proto}//${location.host}/ws`;
-    const socket = new WebSocket(wsUrl);
+    let disposed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout>;
 
-    socket.onmessage = (e) => {
-      const event: WsEvent = JSON.parse(e.data);
-      switch (event.type) {
-        case 'session:created':
-          setSessions((prev) => [event.session, ...prev]);
-          break;
-        case 'session:phase_changed':
-          setSessions((prev) =>
-            prev.map((s) => s.id === event.sessionId ? { ...s, phase: event.phase as Session['phase'] } : s),
-          );
-          break;
-        case 'decision:pending_review':
-          setDecisions((prev) => [event.decision, ...prev]);
-          break;
-        case 'event:received':
-          setEvents((prev) => [event.event, ...prev].slice(0, 50));
-          break;
-        case 'agent:connected':
-          setAgents((prev) => prev.map((a) => a.id === event.agentId ? { ...a, connected: true } : a));
-          break;
-        case 'agent:disconnected':
-          setAgents((prev) => prev.map((a) => a.id === event.agentId ? { ...a, connected: false } : a));
-          break;
-      }
+    function connect() {
+      if (disposed) return;
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${proto}//${location.host}/ws`;
+      const socket = new WebSocket(wsUrl);
+      wsRef.current = socket;
+
+      socket.onopen = () => {
+        console.log('[WS] Connected');
+        setWsConnected(true);
+      };
+
+      socket.onmessage = (e) => {
+        const event: WsEvent = JSON.parse(e.data);
+        switch (event.type) {
+          case 'session:created':
+            setSessions((prev) => [event.session, ...prev]);
+            break;
+          case 'session:phase_changed':
+            setSessions((prev) =>
+              prev.map((s) => s.id === event.sessionId ? { ...s, phase: event.phase as Session['phase'] } : s),
+            );
+            break;
+          case 'decision:pending_review':
+            setDecisions((prev) => [event.decision, ...prev]);
+            break;
+          case 'event:received':
+            setEvents((prev) => [event.event, ...prev].slice(0, 50));
+            break;
+          case 'agent:connected':
+            setAgents((prev) => prev.map((a) => a.id === event.agentId ? { ...a, connected: true } : a));
+            break;
+          case 'agent:disconnected':
+            setAgents((prev) => prev.map((a) => a.id === event.agentId ? { ...a, connected: false } : a));
+            break;
+        }
+      };
+
+      socket.onclose = () => {
+        setWsConnected(false);
+        if (!disposed) {
+          console.log('[WS] Disconnected, reconnecting in 3s...');
+          reconnectTimer = setTimeout(connect, 3000);
+        }
+      };
+    }
+
+    connect();
+    return () => {
+      disposed = true;
+      clearTimeout(reconnectTimer);
+      wsRef.current?.close();
     };
-
-    socket.onclose = () => {
-      console.log('[WS] Disconnected, reconnecting in 3s...');
-      setTimeout(() => setWs(null), 3000);
-    };
-
-    setWs(socket);
-    return () => socket.close();
-  }, [ws === null]);
+  }, []);
 
   const navItems: { key: View; label: string; count?: number }[] = [
     { key: 'sessions', label: 'Sessions', count: sessions.length },

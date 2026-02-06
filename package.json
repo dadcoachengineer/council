@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/server/index.ts",
-    "dev:web": "vite dev src/web",
+    "dev:web": "vite dev",
     "build": "tsup && vite build",
     "build:server": "tsup",
     "build:web": "vite build",
