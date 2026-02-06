@@ -1,0 +1,155 @@
+import { useState, useEffect } from 'preact/hooks';
+import { MessageThread } from './MessageThread.js';
+import type { Session, Message, Vote, Decision } from '../../shared/types.js';
+
+interface SessionData {
+  session: Session;
+  messages: Message[];
+  votes: Vote[];
+  decision: Decision | null;
+}
+
+interface Props {
+  sessionId: string;
+  onBack: () => void;
+}
+
+const phaseColors: Record<string, string> = {
+  investigation: 'var(--info)',
+  proposal: 'var(--accent)',
+  discussion: 'var(--warning)',
+  voting: '#c084fc',
+  review: 'var(--danger)',
+  decided: 'var(--success)',
+  closed: 'var(--text-dim)',
+};
+
+export function SessionView({ sessionId, onBack }: Props) {
+  const [data, setData] = useState<SessionData | null>(null);
+
+  useEffect(() => {
+    const load = async () => {
+      const res = await fetch(`/api/sessions/${sessionId}`);
+      if (res.ok) setData(await res.json());
+    };
+    load();
+    const interval = setInterval(load, 3000);
+    return () => clearInterval(interval);
+  }, [sessionId]);
+
+  if (!data) {
+    return <div style={{ color: 'var(--text-dim)', padding: 40 }}>Loading...</div>;
+  }
+
+  const { session, messages, votes, decision } = data;
+
+  return (
+    <div>
+      <button
+        onClick={onBack}
+        style={{
+          background: 'none',
+          border: 'none',
+          color: 'var(--accent)',
+          cursor: 'pointer',
+          fontSize: 14,
+          marginBottom: 16,
+          padding: 0,
+        }}
+      >
+        &larr; Back to sessions
+      </button>
+
+      <div style={{
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)',
+        padding: 20,
+        marginBottom: 20,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h2 style={{ fontSize: 18, fontWeight: 600 }}>{session.title}</h2>
+          <span style={{
+            padding: '4px 12px',
+            borderRadius: 12,
+            fontSize: 13,
+            fontWeight: 500,
+            background: `${phaseColors[session.phase] ?? 'var(--text-dim)'}22`,
+            color: phaseColors[session.phase] ?? 'var(--text-dim)',
+          }}>
+            {session.phase}
+          </span>
+        </div>
+        <div style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 8 }}>
+          ID: {session.id} &middot; Round: {session.deliberationRound} &middot; Lead: {session.leadAgentId ?? 'none'}
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20 }}>
+        <div>
+          <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Messages</h3>
+          <MessageThread messages={messages} />
+        </div>
+
+        <div>
+          {/* Votes */}
+          <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Votes</h3>
+          {votes.length === 0 ? (
+            <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>No votes yet</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
+              {votes.map((v) => (
+                <div key={v.id} style={{
+                  background: 'var(--surface)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius)',
+                  padding: 12,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <span style={{ fontWeight: 500, fontSize: 13 }}>{v.agentId}</span>
+                    <span style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: v.value === 'approve' ? 'var(--success)' : v.value === 'reject' ? 'var(--danger)' : 'var(--text-dim)',
+                    }}>
+                      {v.value.toUpperCase()}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>{v.reasoning}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Decision */}
+          {decision && (
+            <div>
+              <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Decision</h3>
+              <div style={{
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius)',
+                padding: 12,
+              }}>
+                <div style={{
+                  fontWeight: 600,
+                  fontSize: 14,
+                  color: decision.outcome === 'approved' ? 'var(--success)' : decision.outcome === 'rejected' ? 'var(--danger)' : 'var(--warning)',
+                  marginBottom: 6,
+                }}>
+                  {decision.outcome.toUpperCase()}
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--text-dim)' }}>{decision.summary}</div>
+                {decision.humanNotes && (
+                  <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8, fontStyle: 'italic' }}>
+                    Review notes: {decision.humanNotes}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

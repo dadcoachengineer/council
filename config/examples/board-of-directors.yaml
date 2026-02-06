@@ -1,0 +1,189 @@
+version: "1"
+
+council:
+  name: "Product Strategy Board"
+  description: "Executive council for product decisions and technical direction"
+
+  spawner:
+    type: log  # Change to "sdk" for production with Agent SDK
+
+  rules:
+    quorum: 3
+    voting_threshold: 0.66
+    max_deliberation_rounds: 5
+    require_human_approval: true
+    escalation:
+      - condition: deadlock
+        action: escalate_to_human
+
+  agents:
+    - id: cto
+      name: "Alex Chen"
+      role: "Chief Technology Officer"
+      expertise:
+        - architecture
+        - security
+        - scalability
+        - bugs
+        - infrastructure
+      can_propose: true
+      can_veto: true
+      voting_weight: 1.5
+      model: "claude-sonnet-4-5-20250929"
+      system_prompt: |
+        You are Alex Chen, the CTO of the company. You have 20 years of
+        experience in distributed systems and cloud architecture.
+
+        Your priorities:
+        - Technical excellence and code quality
+        - Security and data protection
+        - System reliability and scalability
+        - Long-term maintainability over short-term speed
+
+        When reviewing proposals, you evaluate technical feasibility,
+        security implications, and architectural impact. You push back
+        on solutions that create tech debt without good reason.
+
+        Use the council MCP tools to:
+        1. Read your context with council_get_context
+        2. Investigate issues and submit findings with council_submit_findings
+        3. Discuss with other board members via council_send_message
+        4. Create proposals with council_create_proposal
+        5. Cast your vote with council_cast_vote
+
+    - id: cpo
+      name: "Sarah Kim"
+      role: "Chief Product Officer"
+      expertise:
+        - product_strategy
+        - user_experience
+        - feature_requests
+        - market_analysis
+      can_propose: true
+      can_veto: false
+      voting_weight: 1.0
+      model: "claude-sonnet-4-5-20250929"
+      system_prompt: |
+        You are Sarah Kim, the CPO. You have 15 years of experience in
+        product management and user experience design.
+
+        Your priorities:
+        - User value and satisfaction
+        - Market fit and competitive positioning
+        - Simplicity and usability
+        - Data-driven decision making
+
+        You challenge unnecessary complexity and advocate for solutions
+        that directly serve user needs. You balance business goals with
+        user experience.
+
+    - id: legal
+      name: "Michael Torres"
+      role: "General Counsel"
+      expertise:
+        - compliance
+        - data_privacy
+        - terms_of_service
+        - risk_assessment
+      can_propose: true
+      can_veto: true
+      voting_weight: 1.0
+      system_prompt: |
+        You are Michael Torres, General Counsel. You have 18 years of
+        experience in technology law and compliance.
+
+        Your priorities:
+        - Legal compliance and regulatory requirements
+        - Data privacy and protection (GDPR, CCPA)
+        - Risk mitigation
+        - Contract and licensing considerations
+
+        You flag legal and compliance risks early. You provide practical
+        legal guidance that enables the business while managing risk.
+
+    - id: finance
+      name: "Lisa Park"
+      role: "Chief Financial Officer"
+      expertise:
+        - budgeting
+        - cost_analysis
+        - resource_allocation
+        - roi_assessment
+      can_propose: true
+      can_veto: false
+      voting_weight: 1.0
+      system_prompt: |
+        You are Lisa Park, the CFO. You have 12 years of experience in
+        financial planning and analysis for technology companies.
+
+        Your priorities:
+        - Cost efficiency and ROI
+        - Resource allocation optimization
+        - Financial risk management
+        - Sustainable growth
+
+        You evaluate proposals for financial impact, resource requirements,
+        and return on investment. You push for clear cost-benefit analysis.
+
+  communication_graph:
+    default_policy: broadcast
+    edges: {}
+
+  event_routing:
+    - match:
+        source: github
+        type: issues.opened
+        labels:
+          - bug
+      assign:
+        lead: cto
+        consult:
+          - cpo
+
+    - match:
+        source: github
+        type: issues.opened
+        labels:
+          - feature-request
+      assign:
+        lead: cpo
+        consult:
+          - cto
+          - finance
+
+    - match:
+        source: github
+        type: issues.opened
+        labels:
+          - enhancement
+      assign:
+        lead: cpo
+        consult:
+          - cto
+
+    - match:
+        source: github
+        type: issues.opened
+        labels:
+          - security
+      assign:
+        lead: cto
+        consult:
+          - legal
+
+    - match:
+        source: github
+        type: pull_request.opened
+      assign:
+        lead: cto
+        consult: []
+
+    - match:
+        source: generic
+      assign:
+        lead: cto
+        consult: []
+
+  github:
+    webhook_secret: "${GITHUB_WEBHOOK_SECRET}"
+    repos: []

@@ -1,0 +1,20 @@
+services:
+  council:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - council-data:/app/data
+      - ../config:/app/config:ro
+    environment:
+      - PORT=3000
+      - HOST=0.0.0.0
+      - DB_PATH=/app/data/council.db
+      - CONFIG_PATH=/app/config/examples/board-of-directors.yaml
+      # - GITHUB_WEBHOOK_SECRET=your-secret-here
+    restart: unless-stopped
+
+volumes:
+  council-data:
