@@ -193,6 +193,11 @@ export class Orchestrator {
       updates.deliberationRound = (session.deliberationRound ?? 0) + 1;
     }
 
+    // Auto-create a placeholder decision when entering review without one
+    if (newPhase === 'review' && !this.store.getDecision(sessionId)) {
+      this.createDecision(sessionId, 'escalated', 'Manually advanced to review (no vote tally).');
+    }
+
     this.store.updateSession(sessionId, updates);
     this.emit({ type: 'session:phase_changed', sessionId, phase: newPhase });
   }

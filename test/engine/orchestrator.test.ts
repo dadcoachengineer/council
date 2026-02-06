@@ -201,6 +201,39 @@ describe('Orchestrator', () => {
     expect(() => orchestrator.castVote(session.id, 'cto', 'reject', 'Changed mind')).toThrow('already voted');
   });
 
+  it('creates placeholder decision when manually transitioning to review', () => {
+    const session = orchestrator.createSession({ title: 'Manual review', phase: 'proposal' });
+    orchestrator.transitionPhase(session.id, 'discussion');
+    orchestrator.transitionPhase(session.id, 'voting');
+    orchestrator.transitionPhase(session.id, 'review');
+
+    // Decision should be auto-created
+    const decision = orchestrator.getDecision(session.id);
+    expect(decision).not.toBeNull();
+    expect(decision!.outcome).toBe('escalated');
+    expect(decision!.summary).toContain('Manually advanced');
+
+    // submitReview should now work
+    orchestrator.submitReview(session.id, 'approve', 'admin', 'LGTM');
+    const final = orchestrator.getSession(session.id);
+    expect(final!.phase).toBe('decided');
+  });
+
+  it('does not overwrite existing decision when transitioning to review', () => {
+    const session = orchestrator.createSession({ title: 'No overwrite', phase: 'proposal' });
+    orchestrator.transitionPhase(session.id, 'discussion');
+    orchestrator.transitionPhase(session.id, 'voting');
+
+    // Vote to create a real decision
+    orchestrator.castVote(session.id, 'cto', 'approve', 'Yes');
+    orchestrator.castVote(session.id, 'cpo', 'approve', 'Yes');
+
+    // Already in review with a real decision
+    const decision = orchestrator.getDecision(session.id);
+    expect(decision!.outcome).toBe('approved');
+    expect(decision!.summary).not.toContain('Manually advanced');
+  });
+
   it('handles human review', () => {
     const session = orchestrator.createSession({ title: 'Review test', phase: 'proposal' });
     orchestrator.transitionPhase(session.id, 'discussion');
