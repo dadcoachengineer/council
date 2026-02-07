@@ -145,10 +145,13 @@ council:
     console.log('[COUNCIL] Password auth enabled (set COUNCIL_PASSWORD)');
   }
 
+  // Health endpoint — always public (used by Docker HEALTHCHECK)
+  app.get('/api/health', (_req, res) => {
+    res.json({ status: 'ok', uptime: process.uptime() });
+  });
+
   // REST API (protected if auth enabled)
   if (auth) {
-    // Health endpoint stays public for Docker healthcheck
-    app.get('/api/health', (_req, res, next) => next());
     app.use('/api', auth.protect);
   }
   app.use('/api', createApiRouter(orchestrator, store));

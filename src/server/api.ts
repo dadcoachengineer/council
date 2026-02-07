@@ -11,12 +11,6 @@ import type { SessionPhase } from '../shared/types.js';
 export function createApiRouter(orchestrator: Orchestrator, store: DbStore): Router {
   const router = Router();
 
-  // ── Health ──
-
-  router.get('/health', (_req: Request, res: Response) => {
-    res.json({ status: 'ok', uptime: process.uptime() });
-  });
-
   // ── Councils ──
 
   router.get('/councils', (_req: Request, res: Response) => {
