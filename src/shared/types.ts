@@ -9,7 +9,7 @@ export type SessionPhase =
   | 'decided'
   | 'closed';
 
-export type VoteValue = 'approve' | 'reject' | 'abstain';
+export type VoteValue = 'approve' | 'reject' | 'abstain' | 'consent' | 'object';
 
 export type DecisionOutcome = 'approved' | 'rejected' | 'escalated';
 
@@ -41,9 +41,25 @@ export interface AgentStatus {
 
 // ── Council ──
 
+// ── Voting schemes ──
+
+export type VotingSchemeName =
+  | 'weighted_majority'
+  | 'unanimous'
+  | 'supermajority'
+  | 'consent_based'
+  | 'advisory';
+
+export interface VotingSchemeConfig {
+  type: VotingSchemeName;
+  preset?: 'two_thirds' | 'three_quarters';
+  threshold?: number;
+}
+
 export interface CouncilRules {
   quorum: number;
   voting_threshold: number;
+  voting_scheme?: VotingSchemeConfig;
   max_deliberation_rounds: number;
   require_human_approval: boolean;
   escalation: EscalationRule[];

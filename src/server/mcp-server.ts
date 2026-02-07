@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { Router, Request, Response } from 'express';
 import { Router as createRouter } from 'express';
 import type { Orchestrator } from '../engine/orchestrator.js';
+import { createVotingScheme } from '../engine/voting-schemes/index.js';
 
 /**
  * Register all agent-facing tools on an McpServer instance.
@@ -203,11 +204,11 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
   server.registerTool(
     'council_cast_vote',
     {
-      description: 'Vote on a proposal (approve/reject/abstain with reasoning)',
+      description: 'Vote on a proposal. Valid values depend on the voting scheme: approve/reject/abstain (majority, supermajority, unanimous, advisory) or consent/object/abstain (consent-based). Use council_get_voting_info to check.',
       inputSchema: {
         agent_token: z.string().describe('Your agent authentication token'),
         session_id: z.string().describe('The session ID'),
-        vote: z.enum(['approve', 'reject', 'abstain']).describe('Your vote'),
+        vote: z.enum(['approve', 'reject', 'abstain', 'consent', 'object']).describe('Your vote (valid values depend on the council voting scheme)'),
         reasoning: z.string().describe('Reasoning for your vote'),
       },
     },
@@ -280,6 +281,39 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
             name: config.council.name,
             description: config.council.description,
             agents: config.council.agents.map((a) => ({ id: a.id, name: a.name, role: a.role })),
+          }, null, 2),
+        }],
+      };
+    },
+  );
+
+  // ── Tool: council_get_voting_info ──
+  server.registerTool(
+    'council_get_voting_info',
+    {
+      description: 'Get the voting scheme and valid vote values for this council',
+      inputSchema: {
+        agent_token: z.string().describe('Your agent authentication token'),
+      },
+    },
+    async ({ agent_token }) => {
+      const agentId = registry.resolveToken(agent_token);
+      if (!agentId) {
+        return { content: [{ type: 'text', text: 'Error: Invalid agent token' }], isError: true };
+      }
+      registry.touch(agentId);
+
+      const config = orchestrator.getConfig();
+      const scheme = createVotingScheme(config.council.rules.voting_scheme);
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            scheme: scheme.name,
+            validVoteValues: scheme.validVoteValues(),
+            quorum: config.council.rules.quorum,
+            votingThreshold: config.council.rules.voting_threshold,
           }, null, 2),
         }],
       };

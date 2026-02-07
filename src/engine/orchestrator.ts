@@ -4,6 +4,7 @@ import type {
   SessionPhase,
   Message,
   Vote,
+  VoteValue,
   Decision,
   CouncilConfig,
   AgentSpawner,
@@ -15,7 +16,9 @@ import type { WebhookEvent } from '../shared/events.js';
 import { EventRouter, type RouteResult } from './event-router.js';
 import { MessageBus } from './message-bus.js';
 import { AgentRegistry } from './agent-registry.js';
-import { tallyVotes, allVotesCast } from './voting.js';
+import { allVotesCast } from './voting.js';
+import { createVotingScheme } from './voting-schemes/index.js';
+import type { TallyResult } from './voting-schemes/types.js';
 import type { EscalationEngine } from './escalation-engine.js';
 
 export type OrchestratorEvent =
@@ -301,11 +304,20 @@ export class Orchestrator {
     return message;
   }
 
-  castVote(sessionId: string, agentId: string, value: 'approve' | 'reject' | 'abstain', reasoning: string): Vote {
+  castVote(sessionId: string, agentId: string, value: VoteValue, reasoning: string): Vote {
     const session = this.store.getSession(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
     if (session.phase !== 'voting') {
       throw new Error(`Cannot vote in phase: ${session.phase}`);
+    }
+
+    // Validate vote value against the active voting scheme
+    const scheme = createVotingScheme(this.config.council.rules.voting_scheme);
+    const validValues = scheme.validVoteValues();
+    if (!validValues.includes(value)) {
+      throw new Error(
+        `Invalid vote value "${value}" for scheme "${scheme.name}". Valid: ${validValues.join(', ')}`,
+      );
     }
 
     // Check for duplicate vote
@@ -336,8 +348,14 @@ export class Orchestrator {
   }
 
   private concludeVoting(sessionId: string, votes: Vote[]): void {
-    const tally = tallyVotes(
-      votes,
+    const scheme = createVotingScheme(this.config.council.rules.voting_scheme);
+    const ballots = votes.map((v) => ({
+      agentId: v.agentId,
+      value: v.value,
+      reasoning: v.reasoning,
+    }));
+    const tally = scheme.tally(
+      ballots,
       this.config.council.agents,
       this.config.council.rules,
     );
@@ -357,10 +375,10 @@ export class Orchestrator {
     }
 
     if (this.config.council.rules.require_human_approval) {
-      this.createDecision(sessionId, tally.outcome, this.tallyToSummary(tally));
+      this.createDecision(sessionId, tally.outcome, tally.summary);
       this.transitionPhase(sessionId, 'review');
     } else {
-      this.createDecision(sessionId, tally.outcome, this.tallyToSummary(tally));
+      this.createDecision(sessionId, tally.outcome, tally.summary);
       this.transitionPhase(sessionId, 'decided');
     }
   }
@@ -501,16 +519,6 @@ export class Orchestrator {
 
   private eventContext(event: WebhookEvent): string {
     return JSON.stringify(event.payload, null, 2);
-  }
-
-  private tallyToSummary(tally: ReturnType<typeof tallyVotes>): string {
-    const parts = [
-      `Approve: ${tally.approve}, Reject: ${tally.reject}, Abstain: ${tally.abstain}`,
-      `Quorum: ${tally.quorumMet ? 'met' : 'not met'}`,
-      `Threshold: ${tally.thresholdMet ? 'met' : 'not met'}`,
-    ];
-    if (tally.vetoExercised) parts.push('Veto exercised');
-    return parts.join('. ');
   }
 
   getCouncilId(): string {
