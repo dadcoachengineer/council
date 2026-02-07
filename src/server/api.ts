@@ -107,11 +107,14 @@ export function createApiRouter(orchestrator: Orchestrator, store: DbStore): Rou
   });
 
   router.post('/sessions/:id/review', (req: Request, res: Response) => {
-    const { action, reviewedBy, notes } = req.body;
-    if (!action || !reviewedBy) {
-      res.status(400).json({ error: 'Request body must include "action" and "reviewedBy" fields' });
+    const { action, notes } = req.body;
+    if (!action) {
+      res.status(400).json({ error: 'Request body must include "action" field' });
       return;
     }
+
+    // Use authenticated user's name, fall back to body.reviewedBy for backward compat
+    const reviewedBy = req.user?.displayName ?? req.body.reviewedBy ?? 'Unknown';
 
     try {
       orchestrator.submitReview(String(req.params.id), action, reviewedBy, notes);

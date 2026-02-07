@@ -2,38 +2,37 @@ import { useState } from 'preact/hooks';
 import type { PublicUser } from '../../shared/types.js';
 
 interface Props {
-  onLogin: (user: PublicUser) => void;
-  onRequires2fa: (pendingSession: string) => void;
+  pendingSession: string;
+  onVerified: (user: PublicUser) => void;
+  onBack: () => void;
 }
 
-export function LoginPage({ onLogin, onRequires2fa }: Props) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+export function TwoFactorPage({ pendingSession, onVerified, onBack }: Props) {
+  const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [useRecovery, setUseRecovery] = useState(false);
 
   const handleSubmit = async (e: Event) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
+    const endpoint = useRecovery ? '/auth/login/recovery' : '/auth/login/2fa';
+
     try {
-      const res = await fetch('/auth/login', {
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ pendingSession, code: code.trim() }),
       });
 
       const data = await res.json();
 
       if (res.ok) {
-        if (data.requires2fa) {
-          onRequires2fa(data.pendingSession);
-        } else {
-          onLogin(data.user);
-        }
+        onVerified(data.user);
       } else {
-        setError(data.error || 'Login failed');
+        setError(data.error || 'Verification failed');
       }
     } catch {
       setError('Network error');
@@ -50,9 +49,11 @@ export function LoginPage({ onLogin, onRequires2fa }: Props) {
     borderRadius: 'var(--radius)',
     color: 'var(--text)',
     fontSize: 14,
-    fontFamily: 'var(--font)',
+    fontFamily: 'var(--mono)',
     outline: 'none',
     marginBottom: 12,
+    textAlign: 'center' as const,
+    letterSpacing: '0.2em',
   };
 
   return (
@@ -71,28 +72,23 @@ export function LoginPage({ onLogin, onRequires2fa }: Props) {
         width: 340,
       }}>
         <h1 style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent)', marginBottom: 4 }}>
-          Council
+          Two-Factor Authentication
         </h1>
         <p style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 24 }}>
-          Sign in to continue
+          {useRecovery
+            ? 'Enter one of your recovery codes.'
+            : 'Enter the 6-digit code from your authenticator app.'
+          }
         </p>
 
         <input
-          type="email"
-          value={email}
-          onInput={(e) => setEmail((e.target as HTMLInputElement).value)}
-          placeholder="Email"
+          type="text"
+          value={code}
+          onInput={(e) => setCode((e.target as HTMLInputElement).value)}
+          placeholder={useRecovery ? 'xxxx-xxxx-xxxx' : '000000'}
           autoFocus
           required
-          style={inputStyle}
-        />
-
-        <input
-          type="password"
-          value={password}
-          onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
-          placeholder="Password"
-          required
+          maxLength={useRecovery ? 20 : 6}
           style={inputStyle}
         />
 
@@ -104,7 +100,7 @@ export function LoginPage({ onLogin, onRequires2fa }: Props) {
 
         <button
           type="submit"
-          disabled={loading || !email || !password}
+          disabled={loading || !code.trim()}
           style={{
             width: '100%',
             padding: '10px 16px',
@@ -115,11 +111,43 @@ export function LoginPage({ onLogin, onRequires2fa }: Props) {
             fontSize: 14,
             fontWeight: 500,
             cursor: loading ? 'wait' : 'pointer',
-            opacity: loading || !email || !password ? 0.6 : 1,
+            opacity: loading || !code.trim() ? 0.6 : 1,
+            marginBottom: 12,
           }}
         >
-          {loading ? 'Signing in...' : 'Sign in'}
+          {loading ? 'Verifying...' : 'Verify'}
         </button>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <button
+            type="button"
+            onClick={() => { setUseRecovery(!useRecovery); setCode(''); setError(''); }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--accent)',
+              cursor: 'pointer',
+              fontSize: 13,
+              padding: 0,
+            }}
+          >
+            {useRecovery ? 'Use authenticator app' : 'Use a recovery code'}
+          </button>
+          <button
+            type="button"
+            onClick={onBack}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-dim)',
+              cursor: 'pointer',
+              fontSize: 13,
+              padding: 0,
+            }}
+          >
+            Back to login
+          </button>
+        </div>
       </form>
     </div>
   );

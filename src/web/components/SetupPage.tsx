@@ -2,38 +2,44 @@ import { useState } from 'preact/hooks';
 import type { PublicUser } from '../../shared/types.js';
 
 interface Props {
-  onLogin: (user: PublicUser) => void;
-  onRequires2fa: (pendingSession: string) => void;
+  onSetupComplete: (user: PublicUser) => void;
 }
 
-export function LoginPage({ onLogin, onRequires2fa }: Props) {
+export function SetupPage({ onSetupComplete }: Props) {
   const [email, setEmail] = useState('');
+  const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: Event) => {
     e.preventDefault();
     setError('');
-    setLoading(true);
 
+    if (password !== confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+
+    setLoading(true);
     try {
-      const res = await fetch('/auth/login', {
+      const res = await fetch('/auth/setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, displayName, password }),
       });
 
-      const data = await res.json();
-
       if (res.ok) {
-        if (data.requires2fa) {
-          onRequires2fa(data.pendingSession);
-        } else {
-          onLogin(data.user);
-        }
+        const data = await res.json();
+        onSetupComplete(data.user);
       } else {
-        setError(data.error || 'Login failed');
+        const data = await res.json();
+        setError(data.error || 'Setup failed');
       }
     } catch {
       setError('Network error');
@@ -68,30 +74,60 @@ export function LoginPage({ onLogin, onRequires2fa }: Props) {
         border: '1px solid var(--border)',
         borderRadius: 'var(--radius)',
         padding: 32,
-        width: 340,
+        width: 380,
       }}>
         <h1 style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent)', marginBottom: 4 }}>
-          Council
+          Council Setup
         </h1>
         <p style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 24 }}>
-          Sign in to continue
+          Create your admin account to get started.
         </p>
 
+        <label style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 4, display: 'block' }}>
+          Display Name
+        </label>
         <input
-          type="email"
-          value={email}
-          onInput={(e) => setEmail((e.target as HTMLInputElement).value)}
-          placeholder="Email"
+          type="text"
+          value={displayName}
+          onInput={(e) => setDisplayName((e.target as HTMLInputElement).value)}
+          placeholder="Your name"
           autoFocus
           required
           style={inputStyle}
         />
 
+        <label style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 4, display: 'block' }}>
+          Email
+        </label>
+        <input
+          type="email"
+          value={email}
+          onInput={(e) => setEmail((e.target as HTMLInputElement).value)}
+          placeholder="admin@example.com"
+          required
+          style={inputStyle}
+        />
+
+        <label style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 4, display: 'block' }}>
+          Password
+        </label>
         <input
           type="password"
           value={password}
           onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
-          placeholder="Password"
+          placeholder="Min 8 characters"
+          required
+          style={inputStyle}
+        />
+
+        <label style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 4, display: 'block' }}>
+          Confirm Password
+        </label>
+        <input
+          type="password"
+          value={confirmPassword}
+          onInput={(e) => setConfirmPassword((e.target as HTMLInputElement).value)}
+          placeholder="Confirm password"
           required
           style={inputStyle}
         />
@@ -104,7 +140,7 @@ export function LoginPage({ onLogin, onRequires2fa }: Props) {
 
         <button
           type="submit"
-          disabled={loading || !email || !password}
+          disabled={loading || !email || !displayName || !password || !confirmPassword}
           style={{
             width: '100%',
             padding: '10px 16px',
@@ -115,10 +151,10 @@ export function LoginPage({ onLogin, onRequires2fa }: Props) {
             fontSize: 14,
             fontWeight: 500,
             cursor: loading ? 'wait' : 'pointer',
-            opacity: loading || !email || !password ? 0.6 : 1,
+            opacity: loading || !email || !displayName || !password ? 0.6 : 1,
           }}
         >
-          {loading ? 'Signing in...' : 'Sign in'}
+          {loading ? 'Creating account...' : 'Create Admin Account'}
         </button>
       </form>
     </div>

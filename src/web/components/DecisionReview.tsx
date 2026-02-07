@@ -9,7 +9,6 @@ interface Props {
 export function DecisionReview({ decisions, onReviewSubmitted }: Props) {
   const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
-  const [reviewerName, setReviewerName] = useState('');
 
   const submitReview = async (sessionId: string, action: 'approve' | 'reject' | 'send_back') => {
     await fetch(`/api/sessions/${sessionId}/review`, {
@@ -17,7 +16,6 @@ export function DecisionReview({ decisions, onReviewSubmitted }: Props) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action,
-        reviewedBy: reviewerName || 'Anonymous',
         notes: notes || undefined,
       }),
     });
@@ -57,20 +55,6 @@ export function DecisionReview({ decisions, onReviewSubmitted }: Props) {
 
               {reviewingId === d.sessionId ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <input
-                    type="text"
-                    placeholder="Your name"
-                    value={reviewerName}
-                    onInput={(e) => setReviewerName((e.target as HTMLInputElement).value)}
-                    style={{
-                      padding: '8px 12px',
-                      background: 'var(--surface-2)',
-                      border: '1px solid var(--border)',
-                      borderRadius: 'var(--radius)',
-                      color: 'var(--text)',
-                      fontSize: 13,
-                    }}
-                  />
                   <textarea
                     placeholder="Review notes (optional)"
                     value={notes}
@@ -87,7 +71,7 @@ export function DecisionReview({ decisions, onReviewSubmitted }: Props) {
                       fontFamily: 'var(--font)',
                     }}
                   />
-                  <div style={{ display: 'flex', gap: 8 }}>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <button
                       onClick={() => submitReview(d.sessionId, 'approve')}
                       style={{

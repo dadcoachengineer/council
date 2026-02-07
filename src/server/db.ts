@@ -82,6 +82,26 @@ export const escalationEvents = sqliteTable('escalation_events', {
   createdAt: text('created_at').notNull(),
 });
 
+export const users = sqliteTable('users', {
+  id: text('id').primaryKey(),
+  email: text('email').notNull(),
+  displayName: text('display_name').notNull(),
+  passwordHash: text('password_hash').notNull(),
+  role: text('role').notNull().default('member'),
+  totpSecret: text('totp_secret'),
+  totpVerified: integer('totp_verified').notNull().default(0),
+  recoveryCodes: text('recovery_codes'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const userSessions = sqliteTable('user_sessions', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  expiresAt: text('expires_at').notNull(),
+  createdAt: text('created_at').notNull(),
+});
+
 export const events = sqliteTable('events', {
   id: text('id').primaryKey(),
   councilId: text('council_id').notNull(),
@@ -210,6 +230,26 @@ export function createDb(dbPath: string): { db: DbClient; sqlite: BetterSqlite3.
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT UNIQUE NOT NULL,
+      display_name TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member',
+      totp_secret TEXT,
+      totp_verified INTEGER NOT NULL DEFAULT 0,
+      recovery_codes TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS user_sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id),
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS escalation_events (
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
@@ -227,6 +267,9 @@ export function createDb(dbPath: string): { db: DbClient; sqlite: BetterSqlite3.
     CREATE INDEX IF NOT EXISTS idx_decisions_session ON decisions(session_id);
     CREATE INDEX IF NOT EXISTS idx_events_council ON events(council_id);
     CREATE INDEX IF NOT EXISTS idx_escalation_events_session ON escalation_events(session_id);
+    CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+    CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at);
   `);
 
   runMigrations(sqlite);

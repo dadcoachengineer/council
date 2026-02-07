@@ -1,3 +1,16 @@
+// ── User types ──
+
+export type UserRole = 'admin' | 'member';
+
+export interface PublicUser {
+  id: string;
+  email: string;
+  displayName: string;
+  role: UserRole;
+  totpEnabled: boolean;
+  createdAt: string;
+}
+
 // ── Core domain types for Council ──
 
 export type SessionPhase =

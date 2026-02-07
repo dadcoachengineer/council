@@ -43,6 +43,7 @@ council:
 let council: CouncilApp;
 let baseUrl: string;
 let tmpDir: string;
+let sessionCookie: string;
 
 beforeAll(async () => {
   tmpDir = mkdtempSync(join(tmpdir(), 'council-e2e-'));
@@ -63,12 +64,40 @@ beforeAll(async () => {
   if (typeof addr === 'object' && addr) {
     baseUrl = `http://127.0.0.1:${addr.port}`;
   }
+
+  // Bootstrap admin user for auth
+  const setupRes = await fetch(`${baseUrl}/auth/setup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: 'admin@test.com',
+      displayName: 'Test Admin',
+      password: 'testpassword123',
+    }),
+  });
+  expect(setupRes.status).toBe(201);
+
+  // Extract session cookie
+  const setCookie = setupRes.headers.get('set-cookie') ?? '';
+  const match = setCookie.match(/council_session=([^;]+)/);
+  sessionCookie = match ? `council_session=${match[1]}` : '';
 });
 
 afterAll(async () => {
   await council.close();
   rmSync(tmpDir, { recursive: true, force: true });
 });
+
+/** Helper to make authenticated requests */
+function authFetch(url: string, init?: RequestInit): Promise<Response> {
+  return fetch(url, {
+    ...init,
+    headers: {
+      ...init?.headers,
+      Cookie: sessionCookie,
+    },
+  });
+}
 
 describe('E2E deliberation flow', () => {
   let sessionId: string;
@@ -78,6 +107,11 @@ describe('E2E deliberation flow', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.status).toBe('ok');
+  });
+
+  it('unauthenticated API request returns 401', async () => {
+    const res = await fetch(`${baseUrl}/api/sessions`);
+    expect(res.status).toBe(401);
   });
 
   it('webhook ingestion creates a session in investigation phase', async () => {
@@ -161,7 +195,7 @@ describe('E2E deliberation flow', () => {
   });
 
   it('REST API returns complete session data', async () => {
-    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}`);
+    const res = await authFetch(`${baseUrl}/api/sessions/${sessionId}`);
     expect(res.status).toBe(200);
 
     const body = await res.json();
@@ -186,7 +220,7 @@ describe('E2E deliberation flow', () => {
   });
 
   it('GET /api/sessions lists the session', async () => {
-    const res = await fetch(`${baseUrl}/api/sessions`);
+    const res = await authFetch(`${baseUrl}/api/sessions`);
     expect(res.status).toBe(200);
 
     const sessions = await res.json();
@@ -195,7 +229,7 @@ describe('E2E deliberation flow', () => {
   });
 
   it('GET /api/events lists the ingested event', async () => {
-    const res = await fetch(`${baseUrl}/api/events`);
+    const res = await authFetch(`${baseUrl}/api/events`);
     expect(res.status).toBe(200);
 
     const events = await res.json();
