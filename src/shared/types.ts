@@ -49,9 +49,54 @@ export interface CouncilRules {
   escalation: EscalationRule[];
 }
 
+// ── Escalation ──
+
+export type EscalationTriggerType =
+  | 'deadlock'
+  | 'quorum_not_met'
+  | 'veto_exercised'
+  | 'timeout'
+  | 'max_rounds_exceeded';
+
+export type EscalationActionType =
+  | 'escalate_to_human'
+  | 'restart_discussion'
+  | 'add_agent'
+  | 'auto_decide'
+  | 'notify_external';
+
+export interface EscalationTrigger {
+  type: EscalationTriggerType;
+  phases?: SessionPhase[];
+  timeout_seconds?: number;
+}
+
+export interface EscalationAction {
+  type: EscalationActionType;
+  message?: string;
+  agent_id?: string;
+  forced_outcome?: DecisionOutcome;
+  webhook_url?: string;
+  payload_template?: Record<string, unknown>;
+}
+
 export interface EscalationRule {
-  condition: string;
-  action: string;
+  name?: string;
+  priority?: number;
+  trigger: EscalationTrigger;
+  action: EscalationAction;
+  stop_after?: boolean;
+  max_fires_per_session?: number;
+}
+
+export interface EscalationEvent {
+  id: string;
+  sessionId: string;
+  ruleName: string;
+  triggerType: EscalationTriggerType;
+  actionType: EscalationActionType;
+  details: string;
+  createdAt: string;
 }
 
 export interface CommunicationGraph {

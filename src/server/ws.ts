@@ -56,6 +56,8 @@ function toWsEvent(event: OrchestratorEvent): WsEvent | null {
       return { type: 'decision:pending_review', decision: event.decision };
     case 'event:received':
       return { type: 'event:received', event: event.event };
+    case 'escalation:triggered':
+      return { type: 'escalation:triggered', event: event.event };
     default:
       return null;
   }

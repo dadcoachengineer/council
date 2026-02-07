@@ -1,4 +1,4 @@
-import type { Session, Message, Vote, Decision, IncomingEvent } from './types.js';
+import type { Session, Message, Vote, Decision, IncomingEvent, EscalationEvent } from './types.js';
 
 // ── WebSocket events (server → web UI) ──
 
@@ -9,6 +9,7 @@ export type WsEvent =
   | { type: 'vote:cast'; vote: Vote }
   | { type: 'decision:pending_review'; decision: Decision }
   | { type: 'event:received'; event: IncomingEvent }
+  | { type: 'escalation:triggered'; event: EscalationEvent }
   | { type: 'agent:connected'; agentId: string }
   | { type: 'agent:disconnected'; agentId: string };
 

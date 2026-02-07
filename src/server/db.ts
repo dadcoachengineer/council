@@ -12,6 +12,7 @@ import type {
   CouncilConfig,
   Council,
   DecisionOutcome,
+  EscalationEvent,
 } from '../shared/types.js';
 import type { OrchestratorStore } from '../engine/orchestrator.js';
 
@@ -63,6 +64,16 @@ export const decisions = sqliteTable('decisions', {
   summary: text('summary').notNull(),
   humanReviewedBy: text('human_reviewed_by'),
   humanNotes: text('human_notes'),
+  createdAt: text('created_at').notNull(),
+});
+
+export const escalationEvents = sqliteTable('escalation_events', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull(),
+  ruleName: text('rule_name').notNull(),
+  triggerType: text('trigger_type').notNull(),
+  actionType: text('action_type').notNull(),
+  details: text('details').notNull(),
   createdAt: text('created_at').notNull(),
 });
 
@@ -148,12 +159,23 @@ export function createDb(dbPath: string) {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS escalation_events (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      rule_name TEXT NOT NULL,
+      trigger_type TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      details TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sessions_council ON sessions(council_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_phase ON sessions(phase);
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
     CREATE INDEX IF NOT EXISTS idx_votes_session ON votes(session_id);
     CREATE INDEX IF NOT EXISTS idx_decisions_session ON decisions(session_id);
     CREATE INDEX IF NOT EXISTS idx_events_council ON events(council_id);
+    CREATE INDEX IF NOT EXISTS idx_escalation_events_session ON escalation_events(session_id);
   `);
 
   return db;
@@ -300,6 +322,19 @@ export class DbStore implements OrchestratorStore {
       ...event,
       payload: JSON.stringify(event.payload),
     }).run();
+  }
+
+  // ── Escalation Events ──
+
+  saveEscalationEvent(event: EscalationEvent): void {
+    this.db.insert(escalationEvents).values(event).run();
+  }
+
+  getEscalationEvents(sessionId: string): EscalationEvent[] {
+    return this.db.select().from(escalationEvents)
+      .where(eq(escalationEvents.sessionId, sessionId))
+      .orderBy(escalationEvents.createdAt)
+      .all() as EscalationEvent[];
   }
 
   listEvents(councilId?: string, limit = 50): IncomingEvent[] {

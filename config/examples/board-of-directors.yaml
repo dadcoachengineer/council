@@ -13,8 +13,47 @@ council:
     max_deliberation_rounds: 5
     require_human_approval: true
     escalation:
-      - condition: deadlock
-        action: escalate_to_human
+      - name: "deadlock_retry"
+        priority: 10
+        trigger:
+          type: deadlock
+        action:
+          type: restart_discussion
+        max_fires_per_session: 1
+
+      - name: "deadlock_escalate"
+        priority: 20
+        trigger:
+          type: quorum_not_met
+        action:
+          type: escalate_to_human
+          message: "Council could not reach quorum after retry"
+
+      - name: "veto_notify"
+        priority: 30
+        trigger:
+          type: veto_exercised
+        action:
+          type: escalate_to_human
+          message: "A veto was exercised — human review required"
+
+      - name: "discussion_timeout"
+        priority: 40
+        trigger:
+          type: timeout
+          phases: [discussion]
+          timeout_seconds: 600
+        action:
+          type: escalate_to_human
+          message: "Discussion phase timed out after 10 minutes"
+
+      - name: "max_rounds_auto_reject"
+        priority: 50
+        trigger:
+          type: max_rounds_exceeded
+        action:
+          type: auto_decide
+          forced_outcome: rejected
 
   agents:
     - id: cto

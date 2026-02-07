@@ -9,12 +9,14 @@ import type {
   AgentSpawner,
   IncomingEvent,
   DecisionOutcome,
+  EscalationEvent,
 } from '../shared/types.js';
 import type { WebhookEvent } from '../shared/events.js';
 import { EventRouter, type RouteResult } from './event-router.js';
 import { MessageBus } from './message-bus.js';
 import { AgentRegistry } from './agent-registry.js';
 import { tallyVotes, allVotesCast } from './voting.js';
+import type { EscalationEngine } from './escalation-engine.js';
 
 export type OrchestratorEvent =
   | { type: 'session:created'; session: Session }
@@ -22,7 +24,8 @@ export type OrchestratorEvent =
   | { type: 'message:new'; message: Message }
   | { type: 'vote:cast'; vote: Vote }
   | { type: 'decision:pending_review'; decision: Decision }
-  | { type: 'event:received'; event: IncomingEvent };
+  | { type: 'event:received'; event: IncomingEvent }
+  | { type: 'escalation:triggered'; event: EscalationEvent };
 
 export type OrchestratorListener = (event: OrchestratorEvent) => void;
 
@@ -49,6 +52,9 @@ export interface OrchestratorStore {
 
   saveEvent(event: IncomingEvent): void;
   listEvents(councilId?: string, limit?: number): IncomingEvent[];
+
+  saveEscalationEvent(event: EscalationEvent): void;
+  getEscalationEvents(sessionId: string): EscalationEvent[];
 }
 
 export class Orchestrator {
@@ -61,6 +67,7 @@ export class Orchestrator {
   private store: OrchestratorStore;
   private listeners = new Set<OrchestratorListener>();
   private mcpBaseUrl: string;
+  private escalationEngine: EscalationEngine | null = null;
 
   constructor(opts: {
     config: CouncilConfig;
@@ -336,17 +343,23 @@ export class Orchestrator {
     );
 
     if (!tally.outcome) {
-      // Deadlock - escalate to human
-      this.createDecision(sessionId, 'escalated', 'Voting did not reach quorum.');
+      // Delegate to escalation engine if available
+      if (this.escalationEngine) {
+        this.escalationEngine.evaluate(sessionId, 'quorum_not_met');
+      } else {
+        this.createDecision(sessionId, 'escalated', 'Voting did not reach quorum.');
+      }
       return;
     }
 
+    if (tally.vetoExercised && this.escalationEngine) {
+      this.escalationEngine.evaluate(sessionId, 'veto_exercised');
+    }
+
     if (this.config.council.rules.require_human_approval) {
-      // Create pending decision for human review
       this.createDecision(sessionId, tally.outcome, this.tallyToSummary(tally));
       this.transitionPhase(sessionId, 'review');
     } else {
-      // Auto-decide
       this.createDecision(sessionId, tally.outcome, this.tallyToSummary(tally));
       this.transitionPhase(sessionId, 'decided');
     }
@@ -393,6 +406,41 @@ export class Orchestrator {
       humanNotes: notes ?? null,
     });
     this.transitionPhase(sessionId, 'decided');
+  }
+
+  // ── Escalation engine ──
+
+  setEscalationEngine(engine: EscalationEngine): void {
+    this.escalationEngine = engine;
+  }
+
+  createEscalatedDecision(sessionId: string, reason: string, event: EscalationEvent): Decision {
+    this.store.saveEscalationEvent(event);
+    this.emit({ type: 'escalation:triggered', event });
+    const decision = this.createDecision(sessionId, 'escalated', reason);
+    this.transitionPhase(sessionId, 'review');
+    return decision;
+  }
+
+  createAutoDecision(sessionId: string, outcome: DecisionOutcome, summary: string, event: EscalationEvent): Decision {
+    this.store.saveEscalationEvent(event);
+    this.emit({ type: 'escalation:triggered', event });
+    const decision = this.createDecision(sessionId, outcome, summary);
+    this.transitionPhase(sessionId, 'decided');
+    return decision;
+  }
+
+  async spawnAgentForEscalation(sessionId: string, agentId: string, context: string): Promise<void> {
+    await this.spawnAgent(sessionId, agentId, context);
+  }
+
+  saveEscalationEvent(event: EscalationEvent): void {
+    this.store.saveEscalationEvent(event);
+    this.emit({ type: 'escalation:triggered', event });
+  }
+
+  getEscalationEvents(sessionId: string): EscalationEvent[] {
+    return this.store.getEscalationEvents(sessionId);
   }
 
   // ── Queries ──

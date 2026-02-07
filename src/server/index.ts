@@ -10,6 +10,7 @@ import { MessageBus } from '../engine/message-bus.js';
 import { AgentRegistry } from '../engine/agent-registry.js';
 import { createSpawner } from '../engine/spawner.js';
 import { Orchestrator } from '../engine/orchestrator.js';
+import { EscalationEngine } from '../engine/escalation-engine.js';
 import { createDb, DbStore } from './db.js';
 import { createMcpRouter } from './mcp-server.js';
 import { createWebhookRouter } from './webhooks.js';
@@ -112,6 +113,14 @@ council:
     store,
     mcpBaseUrl: MCP_BASE_URL,
   });
+
+  // ── Escalation Engine ──
+  if (config.council.rules.escalation.length > 0) {
+    const escalationEngine = new EscalationEngine(config, orchestrator);
+    orchestrator.setEscalationEngine(escalationEngine);
+    escalationEngine.start();
+    console.log(`[COUNCIL] Escalation engine started with ${config.council.rules.escalation.length} rule(s)`);
+  }
 
   console.log(`[COUNCIL] Orchestrator initialized with ${config.council.agents.length} agent(s)`);
 
