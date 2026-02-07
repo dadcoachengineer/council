@@ -76,18 +76,56 @@ Tables defined in `src/server/db.ts` using Drizzle ORM: `councils`, `sessions`, 
 
 Add `CREATE TABLE IF NOT EXISTS` and any indexes in the `sqlite.exec()` block in `createDb()`. No migration entry needed — `CREATE TABLE IF NOT EXISTS` handles it.
 
+## Server Factory
+
+`src/server/index.ts` exports a `createApp()` factory for programmatic use and testing:
+
+```typescript
+import { createApp, type CreateAppOptions, type CouncilApp } from '@/server/index.js';
+
+const council = createApp({
+  dbPath: '/path/to/db',
+  config,                    // Parsed CouncilConfig
+  councilId: 'optional-id',  // Auto-generated if omitted
+  mcpBaseUrl: 'http://...',
+  password: 'optional',
+});
+
+// council.app         — Express app
+// council.httpServer   — HTTP server (call .listen() yourself)
+// council.orchestrator — Orchestrator instance
+// council.store        — DbStore instance
+// council.councilId    — Resolved council ID
+// council.close()      — Shuts down HTTP server + SQLite
+```
+
+`createApp()` does NOT call `listen()` — the caller controls the lifecycle. `main()` is guarded by entry-point detection so importing `createApp` from tests won't auto-start the server.
+
+`createDb()` returns `{ db, sqlite }` — the Drizzle client and raw better-sqlite3 instance. `DbClient` type is `ReturnType<typeof drizzle>`.
+
 ## Testing
 
-- Test files live in `test/` mirroring `src/` structure (e.g., `test/engine/`, `test/server/`)
+- Test files live in `test/` mirroring `src/` structure (e.g., `test/engine/`, `test/server/`, `test/integration/`)
 - Uses `@/` path alias for imports (e.g., `import { runMigrations } from '@/server/db.js'`)
 - Vitest config in `vitest.config.ts`
 - Use in-memory or temp-dir SQLite databases for DB tests
+- Integration tests use `createApp()` with ephemeral ports (`listen(0)`) and temp directories
+- 171 tests: unit (engine, shared), server (auth, webhooks, migrations), and e2e integration
 
 ## Configuration
 
 Council YAML config is validated by Zod schemas in `src/shared/schemas.ts`. Types in `src/shared/types.ts`.
 
 Key config sections: `agents`, `rules` (including `voting_scheme`, `escalation`, refinement settings), `event_routing`, `communication_graph`, `spawner`.
+
+## CI / Docker
+
+- GitHub Actions workflow in `.github/workflows/ci.yml`
+- CI runs on push to main and PRs: lint, typecheck, test
+- Docker images published to `ghcr.io/dadcoachengineer/council` on push to main and version tags
+- Dockerfile at `docker/Dockerfile` (multi-stage: build → deps → production)
+- Docker Compose at `docker/docker-compose.yml`
+- Container volumes: `/app/data` (SQLite DB), `/app/config` (YAML configs)
 
 ## Git Workflow
 
