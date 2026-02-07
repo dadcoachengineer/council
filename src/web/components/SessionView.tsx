@@ -11,6 +11,7 @@ interface SessionData {
 
 interface Props {
   sessionId: string;
+  refreshKey?: number;
   onBack: () => void;
 }
 
@@ -24,7 +25,7 @@ const phaseColors: Record<string, string> = {
   closed: 'var(--text-dim)',
 };
 
-export function SessionView({ sessionId, onBack }: Props) {
+export function SessionView({ sessionId, refreshKey, onBack }: Props) {
   const [data, setData] = useState<SessionData | null>(null);
 
   useEffect(() => {
@@ -33,9 +34,7 @@ export function SessionView({ sessionId, onBack }: Props) {
       if (res.ok) setData(await res.json());
     };
     load();
-    const interval = setInterval(load, 3000);
-    return () => clearInterval(interval);
-  }, [sessionId]);
+  }, [sessionId, refreshKey]);
 
   if (!data) {
     return <div style={{ color: 'var(--text-dim)', padding: 40 }}>Loading...</div>;
