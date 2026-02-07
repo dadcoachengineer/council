@@ -91,6 +91,49 @@ export const events = sqliteTable('events', {
   createdAt: text('created_at').notNull(),
 });
 
+// ── Schema migrations ──
+
+interface ColumnMigration {
+  table: string;
+  column: string;
+  type: string;
+  defaultValue?: string;
+}
+
+const MIGRATIONS: ColumnMigration[] = [
+  { table: 'sessions', column: 'active_proposal_id', type: 'TEXT' },
+  { table: 'messages', column: 'parent_message_id', type: 'TEXT' },
+  { table: 'messages', column: 'amendment_status', type: 'TEXT' },
+];
+
+export function runMigrations(sqlite: Database.Database): void {
+  const columnCache = new Map<string, Set<string>>();
+
+  function getColumns(table: string): Set<string> {
+    let cols = columnCache.get(table);
+    if (!cols) {
+      const rows = sqlite.pragma(`table_info(${table})`) as { name: string }[];
+      cols = new Set(rows.map((r) => r.name));
+      columnCache.set(table, cols);
+    }
+    return cols;
+  }
+
+  for (const migration of MIGRATIONS) {
+    const existing = getColumns(migration.table);
+    if (!existing.has(migration.column)) {
+      const defaultClause = migration.defaultValue !== undefined
+        ? ` DEFAULT ${migration.defaultValue}`
+        : '';
+      sqlite.exec(
+        `ALTER TABLE ${migration.table} ADD COLUMN ${migration.column} ${migration.type}${defaultClause}`,
+      );
+      existing.add(migration.column);
+      console.log(`Migration: added ${migration.table}.${migration.column} (${migration.type})`);
+    }
+  }
+}
+
 // ── Database client ──
 
 export type DbClient = ReturnType<typeof createDb>;
@@ -184,6 +227,8 @@ export function createDb(dbPath: string) {
     CREATE INDEX IF NOT EXISTS idx_events_council ON events(council_id);
     CREATE INDEX IF NOT EXISTS idx_escalation_events_session ON escalation_events(session_id);
   `);
+
+  runMigrations(sqlite);
 
   return db;
 }
