@@ -1,0 +1,145 @@
+# Incident Response Team
+#
+# A council for coordinating production incident response under time pressure.
+# Agents cover triage, infrastructure remediation, and communications. Aggressive
+# escalation timers ensure incidents don't stall — the discussion phase has a
+# 2-minute timeout and a 5-minute investigation timeout forces auto-escalation.
+
+version: "1"
+
+council:
+  name: "Incident Response Team"
+  description: "Production incident coordination with time-pressure escalation"
+
+  spawner:
+    type: log  # Change to "sdk" for production
+
+  rules:
+    quorum: 2
+    voting_threshold: 0.5
+    max_deliberation_rounds: 2
+    require_human_approval: true
+    escalation:
+      - name: "investigation_timeout"
+        priority: 10
+        trigger:
+          type: timeout
+          phases: [investigation]
+          timeout_seconds: 300
+        action:
+          type: escalate_to_human
+          message: "URGENT: Investigation stalled for 5 minutes — page on-call lead"
+        stop_after: true
+
+      - name: "discussion_timeout"
+        priority: 20
+        trigger:
+          type: timeout
+          phases: [discussion]
+          timeout_seconds: 120
+        action:
+          type: auto_decide
+          forced_outcome: escalated
+        max_fires_per_session: 1
+
+      - name: "deadlock_page"
+        priority: 30
+        trigger:
+          type: deadlock
+        action:
+          type: escalate_to_human
+          message: "Incident response deadlocked — paging incident commander"
+        stop_after: true
+
+      - name: "max_rounds_escalate"
+        priority: 40
+        trigger:
+          type: max_rounds_exceeded
+        action:
+          type: escalate_to_human
+          message: "Incident exceeded max deliberation rounds — needs human decision"
+
+  agents:
+    - id: triage-lead
+      name: "Triage Lead"
+      role: "Incident Triage Lead"
+      expertise:
+        - incident_classification
+        - severity_assessment
+        - root_cause_analysis
+        - runbook_execution
+      can_propose: true
+      can_veto: true
+      voting_weight: 1.5
+      system_prompt: |
+        You are the incident triage lead. Your job is to rapidly classify
+        and coordinate the response to production incidents.
+
+        Your immediate actions:
+        1. Classify severity (SEV1-critical, SEV2-major, SEV3-minor)
+        2. Identify the affected systems and blast radius
+        3. Determine if this is a known issue with an existing runbook
+        4. Propose immediate mitigation steps
+
+        Time is critical. Be decisive and concise. Prioritize mitigation
+        over root cause analysis during an active incident.
+
+    - id: infra-responder
+      name: "Infrastructure Responder"
+      role: "Infrastructure Engineer"
+      expertise:
+        - cloud_infrastructure
+        - networking
+        - database_operations
+        - scaling
+        - rollback_procedures
+      can_propose: true
+      can_veto: false
+      voting_weight: 1.0
+      system_prompt: |
+        You are an infrastructure engineer responding to production incidents.
+
+        Your focus:
+        - Assess infrastructure health (servers, databases, networking)
+        - Identify resource exhaustion or capacity issues
+        - Recommend rollback, failover, or scaling actions
+        - Evaluate whether the issue is infrastructure or application-level
+
+        Provide specific, actionable remediation steps. Include rollback
+        commands or scaling parameters when applicable.
+
+    - id: comms-lead
+      name: "Communications Lead"
+      role: "Incident Communications"
+      expertise:
+        - status_page_updates
+        - stakeholder_communication
+        - customer_impact_assessment
+        - post_mortem
+      can_propose: true
+      can_veto: false
+      voting_weight: 1.0
+      system_prompt: |
+        You are the incident communications lead. You manage external and
+        internal communications during incidents.
+
+        Your responsibilities:
+        - Assess customer-facing impact
+        - Draft status page updates
+        - Recommend stakeholder notifications
+        - Track incident timeline for post-mortem
+
+        Keep communications factual, concise, and free of blame. Focus on
+        what users are experiencing and what is being done about it.
+
+  communication_graph:
+    default_policy: broadcast
+
+  event_routing:
+    - match:
+        source: generic
+      assign:
+        lead: triage-lead
+        consult:
+          - infra-responder
+          - comms-lead
