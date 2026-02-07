@@ -4,8 +4,26 @@ import type { Orchestrator } from '../engine/orchestrator.js';
 import type { GithubWebhookEvent, GenericWebhookEvent } from '../shared/events.js';
 import type { GithubConfig } from '../shared/types.js';
 
+// Augment Express Request to carry raw body bytes captured by verify callback
+declare module 'express' {
+  interface Request {
+    rawBody?: Buffer;
+  }
+}
+
+function verifyGithubSignature(rawBody: Buffer, secret: string, signature: string): boolean {
+  const expected = 'sha256=' + createHmac('sha256', secret).update(rawBody).digest('hex');
+  const sigBuf = Buffer.from(signature);
+  const expBuf = Buffer.from(expected);
+  // timingSafeEqual throws on length mismatch — reject early
+  if (sigBuf.length !== expBuf.length) return false;
+  return timingSafeEqual(sigBuf, expBuf);
+}
+
 /**
  * Create webhook routes for GitHub and generic event ingestion.
+ * IMPORTANT: The webhook router must be mounted with its own JSON body parser
+ * that captures raw bytes (see createWebhookJsonParser).
  */
 export function createWebhookRouter(
   orchestrator: Orchestrator,
@@ -23,12 +41,13 @@ export function createWebhookRouter(
         return;
       }
 
-      const body = JSON.stringify(req.body);
-      const expected = 'sha256=' + createHmac('sha256', githubConfig.webhook_secret)
-        .update(body)
-        .digest('hex');
+      const rawBody = req.rawBody;
+      if (!rawBody) {
+        res.status(500).json({ error: 'Raw body not captured — check middleware order' });
+        return;
+      }
 
-      if (!timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+      if (!verifyGithubSignature(rawBody, githubConfig.webhook_secret, signature)) {
         res.status(401).json({ error: 'Invalid signature' });
         return;
       }
