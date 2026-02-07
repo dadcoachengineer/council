@@ -19,6 +19,7 @@ function App() {
   const [agents, setAgents] = useState<AgentStatusType[]>([]);
   const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
+  const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
 
   // Fetch initial data
   const fetchSessions = useCallback(async () => {
@@ -75,9 +76,17 @@ function App() {
             setSessions((prev) =>
               prev.map((s) => s.id === event.sessionId ? { ...s, phase: event.phase as Session['phase'] } : s),
             );
+            setSessionRefreshKey((k) => k + 1);
+            break;
+          case 'message:new':
+            setSessionRefreshKey((k) => k + 1);
+            break;
+          case 'vote:cast':
+            setSessionRefreshKey((k) => k + 1);
             break;
           case 'decision:pending_review':
             setDecisions((prev) => [event.decision, ...prev]);
+            setSessionRefreshKey((k) => k + 1);
             break;
           case 'event:received':
             setEvents((prev) => [event.event, ...prev].slice(0, 50));
@@ -178,6 +187,7 @@ function App() {
         {view === 'sessions' && selectedSessionId && (
           <SessionView
             sessionId={selectedSessionId}
+            refreshKey={sessionRefreshKey}
             onBack={() => setSelectedSessionId(null)}
           />
         )}
