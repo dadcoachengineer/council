@@ -29,20 +29,9 @@ Council is an orchestrator that lets AI agents debate, propose, refine, and vote
 
 ## How It Works
 
-```
-                    GitHub / Webhooks
-                          |
-                     Event Router
-                          |
-                    Agent Spawner ──→ Claude Code / SDK agents
-                          |                    |
-                    Orchestrator ←──── MCP Server
-                     /    |    \
-              Investigate  |  Refine
-                    Propose  |  Vote
-                          |
-                    Human Review ──→ Web UI
-```
+<p align="center">
+  <img src="docs/flow-diagram.svg" alt="Council Deliberation Flow" width="720" />
+</p>
 
 1. **Events arrive** — GitHub webhooks, generic webhooks, or manual triggers
 2. **Council routes** to the right agents based on event type, labels, and expertise
@@ -87,10 +76,52 @@ pnpm test
 
 ### Docker
 
+Council publishes Docker images to GitHub Container Registry on every push to `main` and on version tags.
+
+**Pull the latest image:**
+
+```bash
+docker pull ghcr.io/dadcoachengineer/council:main
+```
+
+**Run with a config file:**
+
+```bash
+docker run -d \
+  --name council \
+  -p 3000:3000 \
+  -v council-data:/app/data \
+  -v $(pwd)/config:/app/config:ro \
+  -e CONFIG_PATH=/app/config/examples/board-of-directors.yaml \
+  -e COUNCIL_PASSWORD=changeme \
+  ghcr.io/dadcoachengineer/council:main
+```
+
+**Or use Docker Compose:**
+
 ```bash
 cd docker
 docker compose up --build
 ```
+
+The compose file mounts `config/` read-only and persists the SQLite database in a named volume.
+
+**Available image tags:**
+
+| Tag | Description |
+|-----|-------------|
+| `main` | Latest build from the main branch |
+| `v1.0.0`, `v1.0`, etc. | Semantic version tags (when released) |
+| `sha-abc1234` | Pinned to a specific commit |
+
+**Volumes:**
+
+| Path | Purpose |
+|------|---------|
+| `/app/data` | SQLite database (persist this!) |
+| `/app/config` | Council YAML config files (mount read-only) |
+
+The container exposes port `3000` and includes a health check at `/api/health`.
 
 ## Configuration
 
@@ -234,7 +265,7 @@ Agents connect to `/mcp` via Streamable HTTP and use these tools:
 | **Database** | SQLite (better-sqlite3 + Drizzle ORM) |
 | **Agent Protocol** | MCP (Model Context Protocol) via @modelcontextprotocol/sdk |
 | **Agent Spawning** | Claude Agent SDK or webhook-based |
-| **Testing** | Vitest — 163 tests |
+| **Testing** | Vitest — 171 tests |
 
 ## Contributing
 
