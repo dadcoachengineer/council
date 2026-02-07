@@ -121,6 +121,13 @@ export function createApiRouter(orchestrator: Orchestrator, store: DbStore): Rou
     }
   });
 
+  // ── Escalation Events ──
+
+  router.get('/sessions/:id/escalations', (req: Request, res: Response) => {
+    const escalations = orchestrator.getEscalationEvents(String(req.params.id));
+    res.json(escalations);
+  });
+
   // ── Events ──
 
   router.get('/events', (_req: Request, res: Response) => {

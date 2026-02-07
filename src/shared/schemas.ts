@@ -2,9 +2,37 @@ import { z } from 'zod';
 
 // ── Zod schemas for YAML config validation ──
 
+const EscalationTriggerSchema = z.object({
+  type: z.enum(['deadlock', 'quorum_not_met', 'veto_exercised', 'timeout', 'max_rounds_exceeded']),
+  phases: z.array(z.enum(['investigation', 'proposal', 'discussion', 'voting', 'review', 'decided', 'closed'])).optional(),
+  timeout_seconds: z.number().int().min(1).optional(),
+}).refine(
+  (t) => t.type !== 'timeout' || (t.timeout_seconds !== undefined && t.timeout_seconds > 0),
+  { message: 'timeout trigger requires timeout_seconds' },
+);
+
+const EscalationActionSchema = z.object({
+  type: z.enum(['escalate_to_human', 'restart_discussion', 'add_agent', 'auto_decide', 'notify_external']),
+  message: z.string().optional(),
+  agent_id: z.string().optional(),
+  forced_outcome: z.enum(['approved', 'rejected', 'escalated']).optional(),
+  webhook_url: z.string().optional(),
+  payload_template: z.record(z.unknown()).optional(),
+}).refine(
+  (a) => a.type !== 'add_agent' || (a.agent_id !== undefined),
+  { message: 'add_agent action requires an agent_id' },
+).refine(
+  (a) => a.type !== 'notify_external' || (a.webhook_url !== undefined),
+  { message: 'notify_external action requires a webhook_url' },
+);
+
 const EscalationRuleSchema = z.object({
-  condition: z.string(),
-  action: z.string(),
+  name: z.string().optional(),
+  priority: z.number().int().default(100),
+  trigger: EscalationTriggerSchema,
+  action: EscalationActionSchema,
+  stop_after: z.boolean().default(false),
+  max_fires_per_session: z.number().int().positive().default(1),
 });
 
 const CouncilRulesSchema = z.object({
@@ -12,7 +40,23 @@ const CouncilRulesSchema = z.object({
   voting_threshold: z.number().min(0).max(1),
   max_deliberation_rounds: z.number().int().min(1).default(5),
   require_human_approval: z.boolean().default(true),
-  escalation: z.array(EscalationRuleSchema).default([]),
+  escalation: z.preprocess(
+    (val) => {
+      if (!Array.isArray(val)) return val;
+      return val.map((rule: Record<string, unknown>) => {
+        // Legacy format: { condition: "deadlock", action: "escalate_to_human" }
+        if (typeof rule.condition === 'string' && typeof rule.action === 'string') {
+          return {
+            name: `legacy_${rule.condition}`,
+            trigger: { type: rule.condition },
+            action: { type: rule.action },
+          };
+        }
+        return rule;
+      });
+    },
+    z.array(EscalationRuleSchema).default([]),
+  ),
 });
 
 const AgentConfigSchema = z.object({
@@ -105,6 +149,13 @@ export function validateAgentReferences(config: ValidatedCouncilConfig): string[
       if (!agentIds.has(to)) {
         errors.push(`Communication graph target agent "${to}" not found in agents`);
       }
+    }
+  }
+
+  // Check escalation rule agent references
+  for (const rule of config.council.rules.escalation) {
+    if (rule.action.agent_id && !agentIds.has(rule.action.agent_id)) {
+      errors.push(`Escalation rule "${rule.name ?? 'unnamed'}" references unknown agent "${rule.action.agent_id}"`);
     }
   }
 
