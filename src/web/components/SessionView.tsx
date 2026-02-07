@@ -19,6 +19,7 @@ const phaseColors: Record<string, string> = {
   investigation: 'var(--info)',
   proposal: 'var(--accent)',
   discussion: 'var(--warning)',
+  refinement: '#f59e0b',
   voting: '#c084fc',
   review: 'var(--danger)',
   decided: 'var(--success)',
@@ -41,6 +42,7 @@ export function SessionView({ sessionId, refreshKey, onBack }: Props) {
   }
 
   const { session, messages, votes, decision } = data;
+  const amendments = messages.filter((m) => m.messageType === 'amendment');
 
   return (
     <div>
@@ -145,6 +147,56 @@ export function SessionView({ sessionId, refreshKey, onBack }: Props) {
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* Amendments */}
+          {(session.phase === 'refinement' || amendments.length > 0) && (
+            <div>
+              <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>
+                Amendments
+                {session.phase === 'refinement' && (
+                  <span style={{ fontSize: 12, color: '#f59e0b', marginLeft: 8 }}>
+                    (refinement in progress)
+                  </span>
+                )}
+              </h3>
+              {amendments.length === 0 ? (
+                <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>No amendments yet</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {amendments.map((a) => (
+                    <div key={a.id} style={{
+                      background: 'var(--surface)',
+                      border: '1px solid var(--border)',
+                      borderLeft: `3px solid ${
+                        a.amendmentStatus === 'accepted' ? 'var(--success)'
+                        : a.amendmentStatus === 'rejected' ? 'var(--danger)'
+                        : '#f59e0b'
+                      }`,
+                      borderRadius: 'var(--radius)',
+                      padding: 12,
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <span style={{ fontWeight: 500, fontSize: 13 }}>{a.fromAgentId}</span>
+                        <span style={{
+                          fontSize: 11,
+                          fontWeight: 600,
+                          textTransform: 'uppercase',
+                          color: a.amendmentStatus === 'accepted' ? 'var(--success)'
+                               : a.amendmentStatus === 'rejected' ? 'var(--danger)'
+                               : '#f59e0b',
+                        }}>
+                          {a.amendmentStatus}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                        {a.content}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

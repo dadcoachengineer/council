@@ -50,6 +50,8 @@ function toWsEvent(event: OrchestratorEvent): WsEvent | null {
       return { type: 'session:phase_changed', sessionId: event.sessionId, phase: event.phase };
     case 'message:new':
       return { type: 'message:new', message: event.message };
+    case 'amendment:resolved':
+      return { type: 'amendment:resolved', sessionId: event.sessionId, amendmentId: event.amendmentId, status: event.status };
     case 'vote:cast':
       return { type: 'vote:cast', vote: event.vote };
     case 'decision:pending_review':

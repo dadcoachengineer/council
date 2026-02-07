@@ -4,7 +4,7 @@ import { EventRouter } from '@/engine/event-router.js';
 import { MessageBus } from '@/engine/message-bus.js';
 import { AgentRegistry } from '@/engine/agent-registry.js';
 import { LogWebhookSpawner } from '@/engine/spawner.js';
-import type { CouncilConfig, Session, Message, Vote, Decision, IncomingEvent } from '@/shared/types.js';
+import type { CouncilConfig, Session, Message, Vote, Decision, IncomingEvent, EscalationEvent } from '@/shared/types.js';
 
 function createMockStore(): OrchestratorStore {
   const sessions = new Map<string, Session>();
@@ -31,6 +31,12 @@ function createMockStore(): OrchestratorStore {
       list.push(m);
       messages.set(m.sessionId, list);
     },
+    updateMessage: (id, updates) => {
+      for (const [, msgs] of messages) {
+        const msg = msgs.find((m) => m.id === id);
+        if (msg) { Object.assign(msg, updates); break; }
+      }
+    },
     getMessages: (sid) => messages.get(sid) ?? [],
     saveVote: (v) => {
       const list = voteMap.get(v.sessionId) ?? [];
@@ -56,6 +62,8 @@ function createMockStore(): OrchestratorStore {
     },
     saveEvent: (e) => eventList.push(e),
     listEvents: (_cid, limit = 50) => eventList.slice(0, limit),
+    saveEscalationEvent: () => {},
+    getEscalationEvents: () => [],
   };
 }
 

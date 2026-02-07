@@ -4,6 +4,7 @@ export type SessionPhase =
   | 'investigation'
   | 'proposal'
   | 'discussion'
+  | 'refinement'
   | 'voting'
   | 'review'
   | 'decided'
@@ -56,6 +57,9 @@ export interface VotingSchemeConfig {
   threshold?: number;
 }
 
+export type AmendmentStatus = 'proposed' | 'accepted' | 'rejected';
+export type AmendmentResolution = 'lead_resolves' | 'auto_accept';
+
 export interface CouncilRules {
   quorum: number;
   voting_threshold: number;
@@ -63,6 +67,9 @@ export interface CouncilRules {
   max_deliberation_rounds: number;
   require_human_approval: boolean;
   escalation: EscalationRule[];
+  enable_refinement?: boolean;
+  max_amendments?: number;
+  amendment_resolution?: AmendmentResolution;
 }
 
 // ── Escalation ──
@@ -183,6 +190,7 @@ export interface Session {
   phase: SessionPhase;
   leadAgentId: string | null;
   triggerEventId: string | null;
+  activeProposalId: string | null;
   deliberationRound: number;
   createdAt: string;
   updatedAt: string;
@@ -194,7 +202,9 @@ export interface Message {
   fromAgentId: string;
   toAgentId: string | null; // null = broadcast
   content: string;
-  messageType: 'discussion' | 'consultation' | 'finding' | 'proposal';
+  messageType: 'discussion' | 'consultation' | 'finding' | 'proposal' | 'amendment';
+  parentMessageId: string | null;
+  amendmentStatus: AmendmentStatus | null;
   createdAt: string;
 }
 

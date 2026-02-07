@@ -4,6 +4,7 @@ const phaseColors: Record<string, string> = {
   investigation: 'var(--info)',
   proposal: 'var(--accent)',
   discussion: 'var(--warning)',
+  refinement: '#f59e0b',
   voting: '#c084fc',
   review: 'var(--danger)',
   decided: 'var(--success)',

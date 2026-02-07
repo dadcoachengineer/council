@@ -6,6 +6,7 @@ export type WsEvent =
   | { type: 'session:created'; session: Session }
   | { type: 'session:phase_changed'; sessionId: string; phase: string }
   | { type: 'message:new'; message: Message }
+  | { type: 'amendment:resolved'; sessionId: string; amendmentId: string; status: string }
   | { type: 'vote:cast'; vote: Vote }
   | { type: 'decision:pending_review'; decision: Decision }
   | { type: 'event:received'; event: IncomingEvent }
