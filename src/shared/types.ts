@@ -74,7 +74,17 @@ export interface EventRoutingRule {
 export interface SpawnerConfig {
   type: SpawnerType;
   webhook_url?: string;
+  default_model?: string;
+  max_turns?: number;
+  timeout_ms?: number;
 }
+
+// ── Agent lifecycle events ──
+
+export type AgentLifecycleEvent =
+  | { type: 'agent:started'; agentId: string; sessionId: string }
+  | { type: 'agent:completed'; agentId: string; sessionId: string; durationMs: number; cost?: number }
+  | { type: 'agent:errored'; agentId: string; sessionId: string; error: string };
 
 export interface GithubConfig {
   webhook_secret: string;

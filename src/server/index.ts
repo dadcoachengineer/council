@@ -100,7 +100,7 @@ council:
   const messageBus = new MessageBus(config.council.communication_graph);
   const agentRegistry = new AgentRegistry();
   agentRegistry.loadAgents(config.council.agents);
-  const spawner = createSpawner(config.council.spawner);
+  const spawner = createSpawner(config.council.spawner, agentRegistry);
 
   const orchestrator = new Orchestrator({
     config,
