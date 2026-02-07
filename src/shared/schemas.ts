@@ -35,9 +35,16 @@ const EscalationRuleSchema = z.object({
   max_fires_per_session: z.number().int().positive().default(1),
 });
 
+const VotingSchemeConfigSchema = z.object({
+  type: z.enum(['weighted_majority', 'unanimous', 'supermajority', 'consent_based', 'advisory']).default('weighted_majority'),
+  preset: z.enum(['two_thirds', 'three_quarters']).optional(),
+  threshold: z.number().min(0).max(1).optional(),
+});
+
 const CouncilRulesSchema = z.object({
   quorum: z.number().int().min(1),
   voting_threshold: z.number().min(0).max(1),
+  voting_scheme: VotingSchemeConfigSchema.optional(),
   max_deliberation_rounds: z.number().int().min(1).default(5),
   require_human_approval: z.boolean().default(true),
   escalation: z.preprocess(
