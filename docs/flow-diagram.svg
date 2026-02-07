@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 520" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="8" markerHeight="6" orient="auto-start-auto">
+      <path d="M 0 0 L 10 3.5 L 0 7 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="8" markerHeight="6" orient="auto-start-auto">
+      <path d="M 0 0 L 10 3.5 L 0 7 z" fill="#3b82f6"/>
+    </marker>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#f1f5f9"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="820" height="520" rx="12" fill="url(#bg)" stroke="#e2e8f0" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="410" y="36" text-anchor="middle" font-size="16" font-weight="700" fill="#0f172a">Council Deliberation Flow</text>
+
+  <!-- ═══ Row 1: Event Sources ═══ -->
+  <!-- GitHub -->
+  <rect x="50" y="60" width="130" height="44" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+  <text x="115" y="86" text-anchor="middle" font-size="13" font-weight="600" fill="#166534">GitHub</text>
+
+  <!-- Webhooks -->
+  <rect x="220" y="60" width="130" height="44" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+  <text x="285" y="86" text-anchor="middle" font-size="13" font-weight="600" fill="#166534">Webhooks</text>
+
+  <!-- Manual -->
+  <rect x="390" y="60" width="130" height="44" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+  <text x="455" y="86" text-anchor="middle" font-size="13" font-weight="600" fill="#166534">Manual / API</text>
+
+  <!-- Arrows from sources down to Event Router -->
+  <line x1="115" y1="104" x2="285" y2="148" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="285" y1="104" x2="285" y2="148" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="455" y1="104" x2="285" y2="148" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ═══ Row 2: Event Router ═══ -->
+  <rect x="200" y="148" width="170" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.5"/>
+  <text x="285" y="174" text-anchor="middle" font-size="13" font-weight="600" fill="#1e40af">Event Router</text>
+
+  <!-- Arrow down to Orchestrator -->
+  <line x1="285" y1="192" x2="285" y2="230" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ═══ Row 3: Orchestrator (central hub) ═══ -->
+  <rect x="180" y="230" width="210" height="50" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <text x="285" y="260" text-anchor="middle" font-size="14" font-weight="700" fill="#f8fafc">Orchestrator</text>
+
+  <!-- ═══ Right side: Agent Spawner + Agents ═══ -->
+  <rect x="560" y="148" width="170" height="44" rx="8" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.5"/>
+  <text x="645" y="174" text-anchor="middle" font-size="13" font-weight="600" fill="#6b21a8">Agent Spawner</text>
+
+  <!-- Agents -->
+  <rect x="560" y="220" width="170" height="44" rx="8" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.5"/>
+  <text x="645" y="240" text-anchor="middle" font-size="12" font-weight="600" fill="#6b21a8">Claude / SDK Agents</text>
+  <text x="645" y="255" text-anchor="middle" font-size="11" fill="#7c3aed">via MCP tools</text>
+
+  <!-- Arrow: Orchestrator → Spawner -->
+  <line x1="390" y1="247" x2="558" y2="170" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <!-- Arrow: Spawner → Agents -->
+  <line x1="645" y1="192" x2="645" y2="218" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <!-- Arrow: Agents → Orchestrator (MCP) -->
+  <path d="M 560 250 Q 480 275 392 258" fill="none" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-blue)"/>
+  <text x="478" y="270" text-anchor="middle" font-size="10" fill="#3b82f6" font-style="italic">MCP</text>
+
+  <!-- ═══ Row 4: Deliberation Phases ═══ -->
+  <!-- Phase pipeline -->
+  <rect x="30" y="320" width="105" height="40" rx="6" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+  <text x="82" y="344" text-anchor="middle" font-size="11" font-weight="600" fill="#9a3412">Investigate</text>
+
+  <rect x="155" y="320" width="95" height="40" rx="6" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+  <text x="202" y="344" text-anchor="middle" font-size="11" font-weight="600" fill="#9a3412">Propose</text>
+
+  <rect x="270" y="320" width="90" height="40" rx="6" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+  <text x="315" y="344" text-anchor="middle" font-size="11" font-weight="600" fill="#9a3412">Discuss</text>
+
+  <rect x="380" y="320" width="85" height="40" rx="6" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+  <text x="422" y="344" text-anchor="middle" font-size="11" font-weight="600" fill="#9a3412">Refine</text>
+
+  <rect x="485" y="320" width="75" height="40" rx="6" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+  <text x="522" y="344" text-anchor="middle" font-size="11" font-weight="600" fill="#9a3412">Vote</text>
+
+  <!-- Arrows between phases -->
+  <line x1="135" y1="340" x2="153" y2="340" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <line x1="250" y1="340" x2="268" y2="340" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <line x1="360" y1="340" x2="378" y2="340" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <line x1="465" y1="340" x2="483" y2="340" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+  <!-- Arrow from Orchestrator down to phases -->
+  <line x1="285" y1="280" x2="285" y2="318" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ═══ Row 5: Escalation + Human Review + Decision ═══ -->
+
+  <!-- Escalation -->
+  <rect x="580" y="320" width="110" height="40" rx="6" fill="#fef2f2" stroke="#fca5a5" stroke-width="1.5"/>
+  <text x="635" y="344" text-anchor="middle" font-size="11" font-weight="600" fill="#991b1b">Escalation</text>
+
+  <!-- Arrow from Vote to Escalation -->
+  <line x1="560" y1="340" x2="578" y2="340" stroke="#64748b" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+
+  <!-- Escalation loop back to Discuss -->
+  <path d="M 635 360 Q 635 390 315 362" fill="none" stroke="#ef4444" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+  <text x="500" y="388" text-anchor="middle" font-size="10" fill="#dc2626" font-style="italic">retry / add agent</text>
+
+  <!-- Human Review -->
+  <rect x="200" y="410" width="170" height="48" rx="8" fill="#ecfdf5" stroke="#6ee7b7" stroke-width="1.5"/>
+  <text x="285" y="434" text-anchor="middle" font-size="13" font-weight="600" fill="#065f46">Human Review</text>
+  <text x="285" y="450" text-anchor="middle" font-size="11" fill="#047857">Web Dashboard</text>
+
+  <!-- Arrow from Vote down to Human Review -->
+  <line x1="522" y1="360" x2="372" y2="420" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Decision -->
+  <rect x="480" y="420" width="140" height="48" rx="8" fill="#eff6ff" stroke="#60a5fa" stroke-width="2"/>
+  <text x="550" y="450" text-anchor="middle" font-size="14" font-weight="700" fill="#1e40af">Decision</text>
+
+  <!-- Arrow from Human Review to Decision -->
+  <line x1="370" y1="440" x2="478" y2="444" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Legend -->
+  <rect x="30" y="475" width="760" height="34" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+  <circle cx="55" cy="492" r="5" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+  <text x="67" y="496" font-size="10" fill="#475569">Event source</text>
+  <circle cx="155" cy="492" r="5" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.5"/>
+  <text x="167" y="496" font-size="10" fill="#475569">Routing</text>
+  <circle cx="230" cy="492" r="5" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+  <text x="242" y="496" font-size="10" fill="#475569">Phase</text>
+  <circle cx="295" cy="492" r="5" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.5"/>
+  <text x="307" y="496" font-size="10" fill="#475569">Agent</text>
+  <circle cx="358" cy="492" r="5" fill="#fef2f2" stroke="#fca5a5" stroke-width="1.5"/>
+  <text x="370" y="496" font-size="10" fill="#475569">Escalation</text>
+  <circle cx="445" cy="492" r="5" fill="#ecfdf5" stroke="#6ee7b7" stroke-width="1.5"/>
+  <text x="457" y="496" font-size="10" fill="#475569">Human oversight</text>
+  <line x1="545" y1="492" x2="570" y2="492" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="578" y="496" font-size="10" fill="#475569">MCP connection</text>
+  <line x1="660" y1="492" x2="685" y2="492" stroke="#ef4444" stroke-width="1.2" stroke-dasharray="4,3"/>
+  <text x="693" y="496" font-size="10" fill="#475569">Escalation loop</text>
+</svg>
