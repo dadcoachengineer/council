@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import type BetterSqlite3 from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core';
 import { eq, and, desc } from 'drizzle-orm';
@@ -136,9 +137,9 @@ export function runMigrations(sqlite: Database.Database): void {
 
 // ── Database client ──
 
-export type DbClient = ReturnType<typeof createDb>;
+export type DbClient = ReturnType<typeof drizzle>;
 
-export function createDb(dbPath: string) {
+export function createDb(dbPath: string): { db: DbClient; sqlite: BetterSqlite3.Database } {
   const sqlite = new Database(dbPath);
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
@@ -230,7 +231,7 @@ export function createDb(dbPath: string) {
 
   runMigrations(sqlite);
 
-  return db;
+  return { db, sqlite };
 }
 
 // ── OrchestratorStore implementation ──

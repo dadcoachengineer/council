@@ -1,7 +1,8 @@
-import { createServer } from 'node:http';
+import { createServer, type Server as HttpServer } from 'node:http';
 import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
-import express from 'express';
+import { fileURLToPath } from 'node:url';
+import express, { type Express } from 'express';
 import { nanoid } from 'nanoid';
 
 import { loadConfigFile, parseConfig } from '../engine/config-loader.js';
@@ -17,6 +18,7 @@ import { createWebhookRouter } from './webhooks.js';
 import { createApiRouter } from './api.js';
 import { setupWebSocket } from './ws.js';
 import { createAuth } from './auth.js';
+import type { CouncilConfig } from '../shared/types.js';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -25,44 +27,153 @@ const CONFIG_PATH = process.env.CONFIG_PATH;
 const MCP_BASE_URL = process.env.MCP_BASE_URL ?? `http://localhost:${PORT}/mcp`;
 const COUNCIL_PASSWORD = process.env.COUNCIL_PASSWORD;
 
+// ── createApp factory ──
+
+export interface CreateAppOptions {
+  dbPath: string;
+  config: CouncilConfig;
+  councilId?: string;
+  mcpBaseUrl?: string;
+  password?: string;
+}
+
+export interface CouncilApp {
+  app: Express;
+  httpServer: HttpServer;
+  orchestrator: Orchestrator;
+  store: DbStore;
+  councilId: string;
+  close: () => Promise<void>;
+}
+
+export function createApp(opts: CreateAppOptions): CouncilApp {
+  const { db, sqlite } = createDb(opts.dbPath);
+  const store = new DbStore(db);
+  const config = opts.config;
+  const councilId = opts.councilId ?? nanoid();
+  const mcpBaseUrl = opts.mcpBaseUrl ?? 'http://localhost:3000/mcp';
+
+  // Persist council
+  if (!store.getCouncil(councilId)) {
+    store.saveCouncil({
+      id: councilId,
+      name: config.council.name,
+      description: config.council.description,
+      config,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  // ── Engine ──
+  const eventRouter = new EventRouter(config.council.event_routing);
+  const messageBus = new MessageBus(config.council.communication_graph);
+  const agentRegistry = new AgentRegistry();
+  agentRegistry.loadAgents(config.council.agents);
+  const spawner = createSpawner(config.council.spawner, agentRegistry);
+
+  const orchestrator = new Orchestrator({
+    config,
+    councilId,
+    eventRouter,
+    messageBus,
+    agentRegistry,
+    spawner,
+    store,
+    mcpBaseUrl,
+  });
+
+  // ── Escalation Engine ──
+  if (config.council.rules.escalation.length > 0) {
+    const escalationEngine = new EscalationEngine(config, orchestrator);
+    orchestrator.setEscalationEngine(escalationEngine);
+    escalationEngine.start();
+  }
+
+  // ── Express ──
+  const app = express();
+
+  // Webhook routes get a JSON parser that captures raw bytes for HMAC verification
+  app.use('/webhooks', express.json({
+    limit: '1mb',
+    verify: (req, _res, buf) => {
+      (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+    },
+  }), createWebhookRouter(orchestrator, config.council.github));
+
+  // All other routes use standard JSON parser
+  app.use(express.json({ limit: '1mb' }));
+
+  // MCP endpoint (no auth — agents use their own token-based auth)
+  app.use('/mcp', createMcpRouter(orchestrator));
+
+  // ── Auth (optional) ──
+  const auth = createAuth(opts.password);
+  if (auth) {
+    app.post('/auth/login', auth.login);
+    app.post('/auth/logout', auth.logout);
+    app.get('/auth/check', auth.protect, (_req, res) => {
+      res.json({ authenticated: true });
+    });
+  }
+
+  // Health endpoint — always public
+  app.get('/api/health', (_req, res) => {
+    res.json({ status: 'ok', uptime: process.uptime() });
+  });
+
+  // REST API (protected if auth enabled)
+  if (auth) {
+    app.use('/api', auth.protect);
+  }
+  app.use('/api', createApiRouter(orchestrator, store));
+
+  // ── HTTP + WebSocket ──
+  const httpServer = createServer(app);
+  setupWebSocket(httpServer, orchestrator);
+
+  const close = (): Promise<void> => {
+    return new Promise((resolvePromise, reject) => {
+      httpServer.close((err) => {
+        sqlite.close();
+        if (err) reject(err);
+        else resolvePromise();
+      });
+    });
+  };
+
+  return { app, httpServer, orchestrator, store, councilId, close };
+}
+
+// ── main ──
+
 async function main() {
   console.log('[COUNCIL] Starting Council server...');
 
-  // ── Database ──
+  // ── Database directory ──
   const dbDir = resolve(DB_PATH, '..');
   if (!existsSync(dbDir)) {
     const { mkdirSync } = await import('node:fs');
     mkdirSync(dbDir, { recursive: true });
   }
-  const db = createDb(DB_PATH);
-  const store = new DbStore(db);
-  console.log(`[COUNCIL] Database initialized at ${DB_PATH}`);
 
   // ── Config ──
-  let councilId: string;
-  let config;
+  let config: CouncilConfig;
+  let councilId: string | undefined;
 
   if (CONFIG_PATH) {
     config = loadConfigFile(CONFIG_PATH);
     console.log(`[COUNCIL] Loaded config from ${CONFIG_PATH}: "${config.council.name}"`);
 
-    // Check if this council already exists
-    const existing = store.listCouncils();
-    const match = existing.find((c) => c.name === config!.council.name);
+    // Check if this council already exists (by name) so we reuse its ID
+    const { db, sqlite: sqliteTemp } = createDb(DB_PATH);
+    const tmpStore = new DbStore(db);
+    const existing = tmpStore.listCouncils();
+    const match = existing.find((c) => c.name === config.council.name);
     if (match) {
       councilId = match.id;
       console.log(`[COUNCIL] Using existing council: ${councilId}`);
-    } else {
-      councilId = nanoid();
-      store.saveCouncil({
-        id: councilId,
-        name: config.council.name,
-        description: config.council.description,
-        config,
-        createdAt: new Date().toISOString(),
-      });
-      console.log(`[COUNCIL] Created council: ${councilId}`);
     }
+    sqliteTemp.close();
   } else {
     // Default minimal config for development
     const defaultYaml = `
@@ -85,102 +196,32 @@ council:
   event_routing: []
 `;
     config = parseConfig(defaultYaml);
-    councilId = nanoid();
-    store.saveCouncil({
-      id: councilId,
-      name: config.council.name,
-      description: config.council.description,
-      config,
-      createdAt: new Date().toISOString(),
-    });
-    console.log(`[COUNCIL] Using default development config (council: ${councilId})`);
+    console.log('[COUNCIL] Using default development config');
   }
 
-  // ── Engine ──
-  const eventRouter = new EventRouter(config.council.event_routing);
-  const messageBus = new MessageBus(config.council.communication_graph);
-  const agentRegistry = new AgentRegistry();
-  agentRegistry.loadAgents(config.council.agents);
-  const spawner = createSpawner(config.council.spawner, agentRegistry);
-
-  const orchestrator = new Orchestrator({
+  const council = createApp({
+    dbPath: DB_PATH,
     config,
     councilId,
-    eventRouter,
-    messageBus,
-    agentRegistry,
-    spawner,
-    store,
     mcpBaseUrl: MCP_BASE_URL,
+    password: COUNCIL_PASSWORD,
   });
 
-  // ── Escalation Engine ──
-  if (config.council.rules.escalation.length > 0) {
-    const escalationEngine = new EscalationEngine(config, orchestrator);
-    orchestrator.setEscalationEngine(escalationEngine);
-    escalationEngine.start();
-    console.log(`[COUNCIL] Escalation engine started with ${config.council.rules.escalation.length} rule(s)`);
-  }
-
+  console.log(`[COUNCIL] Council: ${council.councilId}`);
   console.log(`[COUNCIL] Orchestrator initialized with ${config.council.agents.length} agent(s)`);
 
-  // ── Express ──
-  const app = express();
-
-  // Webhook routes get a JSON parser that captures raw bytes for HMAC verification
-  app.use('/webhooks', express.json({
-    limit: '1mb',
-    verify: (req, _res, buf) => {
-      (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
-    },
-  }), createWebhookRouter(orchestrator, config.council.github));
-
-  // All other routes use standard JSON parser
-  app.use(express.json({ limit: '1mb' }));
-
-  // MCP endpoint (no auth — agents use their own token-based auth)
-  app.use('/mcp', createMcpRouter(orchestrator));
-
-  // ── Auth (optional, enabled by COUNCIL_PASSWORD env var) ──
-  const auth = createAuth(COUNCIL_PASSWORD);
-  if (auth) {
-    // Public auth endpoints
-    app.post('/auth/login', auth.login);
-    app.post('/auth/logout', auth.logout);
-    // Check auth status (returns 200 if authed, used by frontend)
-    app.get('/auth/check', auth.protect, (_req, res) => {
-      res.json({ authenticated: true });
-    });
-    console.log('[COUNCIL] Password auth enabled (set COUNCIL_PASSWORD)');
-  }
-
-  // Health endpoint — always public (used by Docker HEALTHCHECK)
-  app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', uptime: process.uptime() });
-  });
-
-  // REST API (protected if auth enabled)
-  if (auth) {
-    app.use('/api', auth.protect);
-  }
-  app.use('/api', createApiRouter(orchestrator, store));
-
-  // Serve web UI static files (production)
+  // Serve web UI static files (production) — only in main(), not in createApp()
   const webDistPath = resolve(import.meta.dirname ?? '.', '../../dist/web');
   if (existsSync(webDistPath)) {
-    app.use(express.static(webDistPath));
+    council.app.use(express.static(webDistPath));
     // SPA fallback
-    app.get('*', (_req, res) => {
+    council.app.get('*', (_req, res) => {
       res.sendFile(resolve(webDistPath, 'index.html'));
     });
     console.log(`[COUNCIL] Serving web UI from ${webDistPath}`);
   }
 
-  // ── HTTP + WebSocket ──
-  const httpServer = createServer(app);
-  setupWebSocket(httpServer, orchestrator);
-
-  httpServer.listen(PORT, HOST, () => {
+  council.httpServer.listen(PORT, HOST, () => {
     console.log(`[COUNCIL] Server listening on http://${HOST}:${PORT}`);
     console.log(`[COUNCIL] MCP endpoint: http://${HOST}:${PORT}/mcp`);
     console.log(`[COUNCIL] Webhooks: http://${HOST}:${PORT}/webhooks/github, /webhooks/ingest`);
@@ -189,7 +230,14 @@ council:
   });
 }
 
-main().catch((err) => {
-  console.error('[COUNCIL] Fatal error:', err);
-  process.exit(1);
-});
+// Only run main() when this file is the entry point (not when imported by tests)
+const isEntryPoint =
+  process.argv[1] === fileURLToPath(import.meta.url) ||
+  process.argv[1]?.endsWith('/dist/server/index.js');
+
+if (isEntryPoint) {
+  main().catch((err) => {
+    console.error('[COUNCIL] Fatal error:', err);
+    process.exit(1);
+  });
+}
