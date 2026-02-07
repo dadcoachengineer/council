@@ -13,6 +13,7 @@ import type {
   Council,
   DecisionOutcome,
   EscalationEvent,
+  AmendmentStatus,
 } from '../shared/types.js';
 import type { OrchestratorStore } from '../engine/orchestrator.js';
 
@@ -33,6 +34,7 @@ export const sessions = sqliteTable('sessions', {
   phase: text('phase').notNull(), // SessionPhase
   leadAgentId: text('lead_agent_id'),
   triggerEventId: text('trigger_event_id'),
+  activeProposalId: text('active_proposal_id'),
   deliberationRound: integer('deliberation_round').notNull().default(0),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
@@ -45,6 +47,8 @@ export const messages = sqliteTable('messages', {
   toAgentId: text('to_agent_id'),
   content: text('content').notNull(),
   messageType: text('message_type').notNull(),
+  parentMessageId: text('parent_message_id'),
+  amendmentStatus: text('amendment_status'),
   createdAt: text('created_at').notNull(),
 });
 
@@ -115,6 +119,7 @@ export function createDb(dbPath: string) {
       phase TEXT NOT NULL,
       lead_agent_id TEXT,
       trigger_event_id TEXT,
+      active_proposal_id TEXT,
       deliberation_round INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -127,6 +132,8 @@ export function createDb(dbPath: string) {
       to_agent_id TEXT,
       content TEXT NOT NULL,
       message_type TEXT NOT NULL,
+      parent_message_id TEXT,
+      amendment_status TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -227,6 +234,7 @@ export class DbStore implements OrchestratorStore {
     if (updates.deliberationRound !== undefined) setClauses.deliberationRound = updates.deliberationRound;
     if (updates.updatedAt !== undefined) setClauses.updatedAt = updates.updatedAt;
     if (updates.leadAgentId !== undefined) setClauses.leadAgentId = updates.leadAgentId;
+    if (updates.activeProposalId !== undefined) setClauses.activeProposalId = updates.activeProposalId;
 
     this.db.update(sessions).set(setClauses).where(eq(sessions.id, id)).run();
   }
@@ -264,6 +272,12 @@ export class DbStore implements OrchestratorStore {
 
   saveMessage(message: Message): void {
     this.db.insert(messages).values(message).run();
+  }
+
+  updateMessage(id: string, updates: Partial<Message>): void {
+    const setClauses: Record<string, unknown> = {};
+    if (updates.amendmentStatus !== undefined) setClauses.amendmentStatus = updates.amendmentStatus;
+    this.db.update(messages).set(setClauses).where(eq(messages.id, id)).run();
   }
 
   getMessages(sessionId: string): Message[] {

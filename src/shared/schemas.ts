@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 const EscalationTriggerSchema = z.object({
   type: z.enum(['deadlock', 'quorum_not_met', 'veto_exercised', 'timeout', 'max_rounds_exceeded']),
-  phases: z.array(z.enum(['investigation', 'proposal', 'discussion', 'voting', 'review', 'decided', 'closed'])).optional(),
+  phases: z.array(z.enum(['investigation', 'proposal', 'discussion', 'refinement', 'voting', 'review', 'decided', 'closed'])).optional(),
   timeout_seconds: z.number().int().min(1).optional(),
 }).refine(
   (t) => t.type !== 'timeout' || (t.timeout_seconds !== undefined && t.timeout_seconds > 0),
@@ -47,6 +47,9 @@ const CouncilRulesSchema = z.object({
   voting_scheme: VotingSchemeConfigSchema.optional(),
   max_deliberation_rounds: z.number().int().min(1).default(5),
   require_human_approval: z.boolean().default(true),
+  enable_refinement: z.boolean().default(true),
+  max_amendments: z.number().int().min(1).default(10),
+  amendment_resolution: z.enum(['lead_resolves', 'auto_accept']).default('lead_resolves'),
   escalation: z.preprocess(
     (val) => {
       if (!Array.isArray(val)) return val;

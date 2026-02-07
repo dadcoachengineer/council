@@ -32,18 +32,22 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
 
       const sessions = orchestrator.listSessions();
       const relevantSessions = sessions.filter(
-        (s) => s.leadAgentId === agentId || s.phase === 'discussion' || s.phase === 'voting',
+        (s) => s.leadAgentId === agentId || s.phase === 'discussion' || s.phase === 'refinement' || s.phase === 'voting',
       );
 
       const context = relevantSessions.map((s) => {
         const msgs = orchestrator.getMessages(s.id);
         const recentMsgs = msgs.slice(-5);
+        const amendments = msgs.filter((m) => m.messageType === 'amendment');
         return {
           sessionId: s.id,
           title: s.title,
           phase: s.phase,
           isLead: s.leadAgentId === agentId,
           deliberationRound: s.deliberationRound,
+          activeProposalId: s.activeProposalId,
+          pendingAmendments: amendments.filter((a) => a.amendmentStatus === 'proposed').length,
+          acceptedAmendments: amendments.filter((a) => a.amendmentStatus === 'accepted').length,
           recentMessages: recentMsgs.map((m) => ({
             from: m.fromAgentId,
             to: m.toAgentId,
@@ -237,7 +241,7 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
       description: 'List sessions with optional phase filter',
       inputSchema: {
         agent_token: z.string().describe('Your agent authentication token'),
-        phase: z.enum(['investigation', 'proposal', 'discussion', 'voting', 'review', 'decided', 'closed'])
+        phase: z.enum(['investigation', 'proposal', 'discussion', 'refinement', 'voting', 'review', 'decided', 'closed'])
           .optional()
           .describe('Filter by phase'),
       },
@@ -284,6 +288,77 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
           }, null, 2),
         }],
       };
+    },
+  );
+
+  // ── Tool: council_propose_amendment ──
+  server.registerTool(
+    'council_propose_amendment',
+    {
+      description: 'Propose an amendment to the active proposal during the refinement phase. Describe the specific change you want to make.',
+      inputSchema: {
+        agent_token: z.string().describe('Your agent authentication token'),
+        session_id: z.string().describe('The session ID'),
+        amendment: z.string().describe('The proposed amendment — describe what should change and why'),
+        parent_message_id: z.string().optional().describe('The proposal message ID to amend (defaults to active proposal)'),
+      },
+    },
+    async ({ agent_token, session_id, amendment, parent_message_id }) => {
+      const agentId = registry.resolveToken(agent_token);
+      if (!agentId) {
+        return { content: [{ type: 'text', text: 'Error: Invalid agent token' }], isError: true };
+      }
+      registry.touch(agentId);
+
+      try {
+        const message = orchestrator.proposeAmendment(session_id, agentId, amendment, parent_message_id);
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              amendmentId: message.id,
+              status: 'amendment_proposed',
+              amendmentStatus: message.amendmentStatus,
+              parentMessageId: message.parentMessageId,
+            }),
+          }],
+        };
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  // ── Tool: council_resolve_amendment ──
+  server.registerTool(
+    'council_resolve_amendment',
+    {
+      description: 'Accept or reject a proposed amendment (lead agent or agents with proposal rights only)',
+      inputSchema: {
+        agent_token: z.string().describe('Your agent authentication token'),
+        session_id: z.string().describe('The session ID'),
+        amendment_id: z.string().describe('The amendment message ID to resolve'),
+        action: z.enum(['accept', 'reject']).describe('Whether to accept or reject the amendment'),
+      },
+    },
+    async ({ agent_token, session_id, amendment_id, action }) => {
+      const agentId = registry.resolveToken(agent_token);
+      if (!agentId) {
+        return { content: [{ type: 'text', text: 'Error: Invalid agent token' }], isError: true };
+      }
+      registry.touch(agentId);
+
+      try {
+        orchestrator.resolveAmendment(session_id, agentId, amendment_id, action);
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ amendmentId: amendment_id, status: `amendment_${action}ed` }),
+          }],
+        };
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true };
+      }
     },
   );
 

@@ -5,6 +5,7 @@ const typeColors: Record<string, string> = {
   consultation: 'var(--info)',
   finding: 'var(--success)',
   proposal: 'var(--warning)',
+  amendment: '#f59e0b',
 };
 
 interface Props {
@@ -41,6 +42,22 @@ export function MessageThread({ messages }: Props) {
               }}>
                 {msg.messageType}
               </span>
+              {msg.messageType === 'amendment' && msg.amendmentStatus && (
+                <span style={{
+                  fontSize: 11,
+                  padding: '1px 6px',
+                  borderRadius: 6,
+                  marginLeft: 4,
+                  background: msg.amendmentStatus === 'accepted' ? 'var(--success)22'
+                            : msg.amendmentStatus === 'rejected' ? 'var(--danger)22'
+                            : 'var(--warning)22',
+                  color: msg.amendmentStatus === 'accepted' ? 'var(--success)'
+                       : msg.amendmentStatus === 'rejected' ? 'var(--danger)'
+                       : 'var(--warning)',
+                }}>
+                  {msg.amendmentStatus}
+                </span>
+              )}
             </div>
             <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>
               {new Date(msg.createdAt).toLocaleTimeString()}

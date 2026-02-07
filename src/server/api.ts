@@ -121,6 +121,15 @@ export function createApiRouter(orchestrator: Orchestrator, store: DbStore): Rou
     }
   });
 
+  // ── Amendments ──
+
+  router.get('/sessions/:id/amendments', (req: Request, res: Response) => {
+    const sessionId = String(req.params.id);
+    const messages = orchestrator.getMessages(sessionId);
+    const amendments = messages.filter((m) => m.messageType === 'amendment');
+    res.json(amendments);
+  });
+
   // ── Escalation Events ──
 
   router.get('/sessions/:id/escalations', (req: Request, res: Response) => {

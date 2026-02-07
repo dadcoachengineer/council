@@ -11,6 +11,7 @@ import type {
   IncomingEvent,
   DecisionOutcome,
   EscalationEvent,
+  AmendmentStatus,
 } from '../shared/types.js';
 import type { WebhookEvent } from '../shared/events.js';
 import { EventRouter, type RouteResult } from './event-router.js';
@@ -25,6 +26,7 @@ export type OrchestratorEvent =
   | { type: 'session:created'; session: Session }
   | { type: 'session:phase_changed'; sessionId: string; phase: SessionPhase }
   | { type: 'message:new'; message: Message }
+  | { type: 'amendment:resolved'; sessionId: string; amendmentId: string; status: string }
   | { type: 'vote:cast'; vote: Vote }
   | { type: 'decision:pending_review'; decision: Decision }
   | { type: 'event:received'; event: IncomingEvent }
@@ -43,6 +45,7 @@ export interface OrchestratorStore {
   listSessions(councilId?: string, phase?: SessionPhase): Session[];
 
   saveMessage(message: Message): void;
+  updateMessage(id: string, updates: Partial<Message>): void;
   getMessages(sessionId: string): Message[];
 
   saveVote(vote: Vote): void;
@@ -166,6 +169,7 @@ export class Orchestrator {
       phase: opts.phase ?? 'proposal',
       leadAgentId: opts.leadAgentId ?? null,
       triggerEventId: opts.triggerEventId ?? null,
+      activeProposalId: null,
       deliberationRound: 0,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -203,6 +207,11 @@ export class Orchestrator {
       updates.deliberationRound = (session.deliberationRound ?? 0) + 1;
     }
 
+    // Synthesize refined proposal when leaving refinement for voting
+    if (session.phase === 'refinement' && newPhase === 'voting') {
+      this.synthesizeRefinedProposal(sessionId);
+    }
+
     // Auto-create a placeholder decision when entering review without one
     if (newPhase === 'review' && !this.store.getDecision(sessionId)) {
       this.createDecision(sessionId, 'escalated', 'Manually advanced to review (no vote tally).');
@@ -213,12 +222,20 @@ export class Orchestrator {
   }
 
   private validTransitions(current: SessionPhase): SessionPhase[] {
+    const refinementEnabled = this.config.council.rules.enable_refinement !== false;
     const transitions: Record<SessionPhase, SessionPhase[]> = {
       investigation: ['proposal', 'closed'],
       proposal: ['discussion', 'closed'],
-      discussion: ['voting', 'discussion', 'closed'], // Can loop for more rounds
-      voting: ['review', 'discussion', 'closed'],     // Back to discussion if no consensus
-      review: ['decided', 'discussion', 'closed'],    // Human can send back
+      discussion: refinementEnabled
+        ? ['voting', 'refinement', 'discussion', 'closed']
+        : ['voting', 'discussion', 'closed'],
+      refinement: ['voting', 'discussion', 'closed'],
+      voting: refinementEnabled
+        ? ['review', 'refinement', 'discussion', 'closed']
+        : ['review', 'discussion', 'closed'],
+      review: refinementEnabled
+        ? ['decided', 'refinement', 'discussion', 'closed']
+        : ['decided', 'discussion', 'closed'],
       decided: ['closed'],
       closed: [],
     };
@@ -235,6 +252,8 @@ export class Orchestrator {
       toAgentId: null,
       content,
       messageType: 'finding',
+      parentMessageId: null,
+      amendmentStatus: null,
       createdAt: new Date().toISOString(),
     };
     this.messageBus.publish(message);
@@ -254,9 +273,14 @@ export class Orchestrator {
       toAgentId: null,
       content,
       messageType: 'proposal',
+      parentMessageId: null,
+      amendmentStatus: null,
       createdAt: new Date().toISOString(),
     };
     this.messageBus.publish(message);
+
+    // Track active proposal
+    this.store.updateSession(sessionId, { activeProposalId: message.id });
 
     // Auto-transition through phases toward discussion
     const session = this.store.getSession(sessionId);
@@ -282,6 +306,8 @@ export class Orchestrator {
       toAgentId,
       content,
       messageType: toAgentId ? 'consultation' : 'discussion',
+      parentMessageId: null,
+      amendmentStatus: null,
       createdAt: new Date().toISOString(),
     };
     this.messageBus.publish(message);
@@ -374,6 +400,16 @@ export class Orchestrator {
       this.escalationEngine.evaluate(sessionId, 'veto_exercised');
     }
 
+    // Auto-refine on non-veto rejection when refinement is enabled
+    if (
+      tally.outcome === 'rejected' &&
+      !tally.vetoExercised &&
+      this.config.council.rules.enable_refinement !== false
+    ) {
+      this.transitionPhase(sessionId, 'refinement');
+      return;
+    }
+
     if (this.config.council.rules.require_human_approval) {
       this.createDecision(sessionId, tally.outcome, tally.summary);
       this.transitionPhase(sessionId, 'review');
@@ -459,6 +495,137 @@ export class Orchestrator {
 
   getEscalationEvents(sessionId: string): EscalationEvent[] {
     return this.store.getEscalationEvents(sessionId);
+  }
+
+  // ── Amendment operations ──
+
+  proposeAmendment(
+    sessionId: string,
+    agentId: string,
+    content: string,
+    parentMessageId?: string,
+  ): Message {
+    const session = this.store.getSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    if (session.phase !== 'refinement') {
+      throw new Error(`Cannot propose amendments in phase: ${session.phase}`);
+    }
+    if (this.config.council.rules.enable_refinement === false) {
+      throw new Error('Refinement is disabled for this council');
+    }
+
+    // Enforce max amendments
+    const existingAmendments = this.store.getMessages(sessionId)
+      .filter((m) => m.messageType === 'amendment' && m.amendmentStatus === 'proposed');
+    const maxAmendments = this.config.council.rules.max_amendments ?? 10;
+    if (existingAmendments.length >= maxAmendments) {
+      throw new Error(`Maximum amendments (${maxAmendments}) reached for this session`);
+    }
+
+    const targetProposalId = parentMessageId ?? session.activeProposalId;
+    if (!targetProposalId) {
+      throw new Error('No active proposal to amend');
+    }
+
+    const autoAccept = this.config.council.rules.amendment_resolution === 'auto_accept';
+
+    const message: Message = {
+      id: nanoid(),
+      sessionId,
+      fromAgentId: agentId,
+      toAgentId: null,
+      content,
+      messageType: 'amendment',
+      parentMessageId: targetProposalId,
+      amendmentStatus: autoAccept ? 'accepted' : 'proposed',
+      createdAt: new Date().toISOString(),
+    };
+    this.messageBus.publish(message);
+    return message;
+  }
+
+  resolveAmendment(
+    sessionId: string,
+    agentId: string,
+    amendmentId: string,
+    action: 'accept' | 'reject',
+  ): void {
+    const session = this.store.getSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    if (session.phase !== 'refinement') {
+      throw new Error('Cannot resolve amendments outside refinement phase');
+    }
+
+    // Only lead agent or agents with proposal rights can resolve
+    const agent = this.agentRegistry.getAgent(agentId);
+    const isLead = session.leadAgentId === agentId;
+    const canResolve = isLead || (agent?.can_propose ?? false);
+    if (!canResolve) {
+      throw new Error(`Agent ${agentId} does not have rights to resolve amendments`);
+    }
+
+    const messages = this.store.getMessages(sessionId);
+    const amendment = messages.find((m) => m.id === amendmentId && m.messageType === 'amendment');
+    if (!amendment) {
+      throw new Error(`Amendment not found: ${amendmentId}`);
+    }
+    if (amendment.amendmentStatus !== 'proposed') {
+      throw new Error(`Amendment ${amendmentId} is already ${amendment.amendmentStatus}`);
+    }
+
+    const newStatus: AmendmentStatus = action === 'accept' ? 'accepted' : 'rejected';
+    this.store.updateMessage(amendmentId, { amendmentStatus: newStatus });
+    this.emit({
+      type: 'amendment:resolved',
+      sessionId,
+      amendmentId,
+      status: newStatus,
+    });
+  }
+
+  private synthesizeRefinedProposal(sessionId: string): void {
+    const session = this.store.getSession(sessionId);
+    if (!session?.activeProposalId) return;
+
+    const messages = this.store.getMessages(sessionId);
+    const originalProposal = messages.find((m) => m.id === session.activeProposalId);
+    if (!originalProposal) return;
+
+    const acceptedAmendments = messages.filter(
+      (m) =>
+        m.messageType === 'amendment' &&
+        m.parentMessageId === session.activeProposalId &&
+        m.amendmentStatus === 'accepted',
+    );
+
+    if (acceptedAmendments.length === 0) return;
+
+    const refinedContent = [
+      '## Refined Proposal',
+      '',
+      '### Original Proposal',
+      originalProposal.content,
+      '',
+      '### Accepted Amendments',
+      ...acceptedAmendments.map(
+        (a, i) => `${i + 1}. [${a.fromAgentId}] ${a.content}`,
+      ),
+    ].join('\n');
+
+    const refinedMessage: Message = {
+      id: nanoid(),
+      sessionId,
+      fromAgentId: session.leadAgentId ?? originalProposal.fromAgentId,
+      toAgentId: null,
+      content: refinedContent,
+      messageType: 'proposal',
+      parentMessageId: session.activeProposalId,
+      amendmentStatus: null,
+      createdAt: new Date().toISOString(),
+    };
+
+    this.messageBus.publish(refinedMessage);
+    this.store.updateSession(sessionId, { activeProposalId: refinedMessage.id });
   }
 
   // ── Queries ──
