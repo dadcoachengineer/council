@@ -51,6 +51,9 @@ const EventRoutingRuleSchema = z.object({
 const SpawnerConfigSchema = z.object({
   type: z.enum(['sdk', 'log', 'webhook']).default('log'),
   webhook_url: z.string().optional(),
+  default_model: z.string().optional(),
+  max_turns: z.number().int().min(1).optional(),
+  timeout_ms: z.number().int().min(1000).optional(),
 });
 
 const GithubConfigSchema = z.object({
