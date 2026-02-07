@@ -15,12 +15,14 @@ import { createMcpRouter } from './mcp-server.js';
 import { createWebhookRouter } from './webhooks.js';
 import { createApiRouter } from './api.js';
 import { setupWebSocket } from './ws.js';
+import { createAuth } from './auth.js';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
 const DB_PATH = process.env.DB_PATH ?? './data/council.db';
 const CONFIG_PATH = process.env.CONFIG_PATH;
 const MCP_BASE_URL = process.env.MCP_BASE_URL ?? `http://localhost:${PORT}/mcp`;
+const COUNCIL_PASSWORD = process.env.COUNCIL_PASSWORD;
 
 async function main() {
   console.log('[COUNCIL] Starting Council server...');
@@ -115,15 +117,40 @@ council:
 
   // ── Express ──
   const app = express();
+
+  // Webhook routes get a JSON parser that captures raw bytes for HMAC verification
+  app.use('/webhooks', express.json({
+    limit: '1mb',
+    verify: (req, _res, buf) => {
+      (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+    },
+  }), createWebhookRouter(orchestrator, config.council.github));
+
+  // All other routes use standard JSON parser
   app.use(express.json({ limit: '1mb' }));
 
-  // MCP endpoint
+  // MCP endpoint (no auth — agents use their own token-based auth)
   app.use('/mcp', createMcpRouter(orchestrator));
 
-  // Webhook endpoints
-  app.use('/webhooks', createWebhookRouter(orchestrator, config.council.github));
+  // ── Auth (optional, enabled by COUNCIL_PASSWORD env var) ──
+  const auth = createAuth(COUNCIL_PASSWORD);
+  if (auth) {
+    // Public auth endpoints
+    app.post('/auth/login', auth.login);
+    app.post('/auth/logout', auth.logout);
+    // Check auth status (returns 200 if authed, used by frontend)
+    app.get('/auth/check', auth.protect, (_req, res) => {
+      res.json({ authenticated: true });
+    });
+    console.log('[COUNCIL] Password auth enabled (set COUNCIL_PASSWORD)');
+  }
 
-  // REST API
+  // REST API (protected if auth enabled)
+  if (auth) {
+    // Health endpoint stays public for Docker healthcheck
+    app.get('/api/health', (_req, res, next) => next());
+    app.use('/api', auth.protect);
+  }
   app.use('/api', createApiRouter(orchestrator, store));
 
   // Serve web UI static files (production)

@@ -5,12 +5,15 @@ import { SessionView } from './components/SessionView.js';
 import { DecisionReview } from './components/DecisionReview.js';
 import { EventLog } from './components/EventLog.js';
 import { AgentStatus } from './components/AgentStatus.js';
+import { LoginPage } from './components/LoginPage.js';
 import type { Session, Decision, IncomingEvent, AgentStatus as AgentStatusType } from '../shared/types.js';
 import type { WsEvent } from '../shared/events.js';
 
 type View = 'sessions' | 'session' | 'decisions' | 'events' | 'agents';
+type AuthState = 'checking' | 'login' | 'authenticated';
 
 function App() {
+  const [authState, setAuthState] = useState<AuthState>('checking');
   const [view, setView] = useState<View>('sessions');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -20,6 +23,25 @@ function App() {
   const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
+
+  // ── Auth check ──
+  useEffect(() => {
+    fetch('/auth/check')
+      .then((res) => {
+        if (res.ok) {
+          setAuthState('authenticated');
+        } else if (res.status === 401) {
+          setAuthState('login');
+        } else {
+          // No auth configured (404) — proceed without login
+          setAuthState('authenticated');
+        }
+      })
+      .catch(() => {
+        // Network error or no auth endpoint — proceed without login
+        setAuthState('authenticated');
+      });
+  }, []);
 
   // Fetch initial data
   const fetchSessions = useCallback(async () => {
@@ -43,14 +65,16 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (authState !== 'authenticated') return;
     fetchSessions();
     fetchDecisions();
     fetchEvents();
     fetchAgents();
-  }, [fetchSessions, fetchDecisions, fetchEvents, fetchAgents]);
+  }, [authState, fetchSessions, fetchDecisions, fetchEvents, fetchAgents]);
 
-  // WebSocket connection
+  // WebSocket connection (only when authenticated)
   useEffect(() => {
+    if (authState !== 'authenticated') return;
     let disposed = false;
     let reconnectTimer: ReturnType<typeof setTimeout>;
 
@@ -115,7 +139,7 @@ function App() {
       clearTimeout(reconnectTimer);
       wsRef.current?.close();
     };
-  }, []);
+  }, [authState]);
 
   const navItems: { key: View; label: string; count?: number }[] = [
     { key: 'sessions', label: 'Sessions', count: sessions.length },
@@ -123,6 +147,14 @@ function App() {
     { key: 'events', label: 'Events', count: events.length },
     { key: 'agents', label: 'Agents', count: agents.length },
   ];
+
+  if (authState === 'checking') {
+    return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', color: 'var(--text-dim)' }}>Loading...</div>;
+  }
+
+  if (authState === 'login') {
+    return <LoginPage onLogin={() => setAuthState('authenticated')} />;
+  }
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>

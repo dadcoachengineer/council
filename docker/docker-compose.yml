@@ -14,6 +14,7 @@ services:
       - DB_PATH=/app/data/council.db
       - CONFIG_PATH=/app/config/examples/board-of-directors.yaml
       # - GITHUB_WEBHOOK_SECRET=your-secret-here
+      # - COUNCIL_PASSWORD=your-password-here
     restart: unless-stopped
 
 volumes:
