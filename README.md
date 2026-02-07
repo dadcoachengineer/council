@@ -1,21 +1,61 @@
-# Council
+<p align="center">
+  <h1 align="center">Council</h1>
+  <p align="center">
+    <strong>A boardroom for your AI agents.</strong>
+    <br />
+    Multi-agent orchestration over MCP — deliberation, voting, and human oversight built in.
+  </p>
+</p>
 
-Multi-agent MCP orchestrator modeled as a corporate governance board. Council is the central hub that orchestrates deliberation between AI agents (CTO, CPO, Legal, Finance, etc.) who connect as external Claude Code / Cowork agents over MCP.
+<p align="center">
+  <a href="#quick-start">Quick Start</a> &middot;
+  <a href="#how-it-works">How It Works</a> &middot;
+  <a href="#configuration">Configuration</a> &middot;
+  <a href="#architecture">Architecture</a> &middot;
+  <a href="#contributing">Contributing</a>
+</p>
 
-## How it works
+---
 
-1. **Events come in** via GitHub webhooks or generic webhooks
-2. **Council routes** the event to the right agent(s) based on YAML config rules
-3. **Agents investigate** autonomously, consult each other through Council's MCP tools
-4. **Proposals are made** and discussed over multiple rounds
-5. **Proposals are refined** — agents propose amendments, the lead accepts or rejects them
-6. **Agents vote** using configurable voting schemes (weighted majority, unanimous, supermajority, consent-based, or advisory)
-7. **Escalation rules fire** automatically on deadlocks, timeouts, vetoes, or quorum failures
-8. **Humans review** the final decision in the web UI
+Council is an orchestrator that lets AI agents debate, propose, refine, and vote on decisions — like a corporate board of directors. Agents connect over [MCP](https://modelcontextprotocol.io/) (Model Context Protocol), communicate through Council's message bus, and follow structured deliberation phases. Humans stay in the loop with a real-time web UI for reviewing and approving decisions.
 
-Agents never talk directly to each other. All communication flows through Council, which enforces a communication graph, persists all state, and drives the deliberation state machine.
+**Why Council?**
 
-## Quick start
+- **Structured multi-agent deliberation** — not just chat, but investigation, proposals, amendments, and formal votes
+- **Configurable governance** — quorum rules, veto power, weighted voting, 5 voting schemes, escalation policies
+- **Human-in-the-loop by default** — every decision can require human review before execution
+- **MCP-native** — agents connect as standard MCP clients, bringing their own tools and capabilities
+- **Zero-config agents** — define personas in YAML; Council handles spawning, routing, and state management
+
+## How It Works
+
+```
+                    GitHub / Webhooks
+                          |
+                     Event Router
+                          |
+                    Agent Spawner ──→ Claude Code / SDK agents
+                          |                    |
+                    Orchestrator ←──── MCP Server
+                     /    |    \
+              Investigate  |  Refine
+                    Propose  |  Vote
+                          |
+                    Human Review ──→ Web UI
+```
+
+1. **Events arrive** — GitHub webhooks, generic webhooks, or manual triggers
+2. **Council routes** to the right agents based on event type, labels, and expertise
+3. **Agents investigate** autonomously and consult each other through MCP tools
+4. **A proposal is made** and debated over multiple deliberation rounds
+5. **Amendments are proposed** — agents refine the proposal before it goes to vote
+6. **Agents vote** — weighted majority, supermajority, unanimous, consent-based, or advisory
+7. **Escalation rules fire** on deadlocks, timeouts, vetoes, or quorum failures
+8. **Humans review** the final decision in the web dashboard
+
+All communication flows through Council. Agents never talk directly to each other — Council enforces the communication graph, persists every message, and drives the state machine.
+
+## Quick Start
 
 ### Prerequisites
 
@@ -29,25 +69,20 @@ pnpm install
 pnpm dev
 ```
 
-The server starts on `http://localhost:3000` with a default development config.
+The server starts on `http://localhost:3000` with the web dashboard and a default development config.
 
-### Run with a config file
+### Run with the example board
 
 ```bash
 CONFIG_PATH=config/examples/board-of-directors.yaml pnpm dev
 ```
 
+This spins up a 4-agent board (CTO, CPO, Legal, CFO) with escalation rules, veto power, and weighted voting.
+
 ### Run tests
 
 ```bash
 pnpm test
-```
-
-### Build for production
-
-```bash
-pnpm build
-pnpm start
 ```
 
 ### Docker
@@ -59,126 +94,175 @@ docker compose up --build
 
 ## Configuration
 
-Council is configured via YAML. See [config/examples/board-of-directors.yaml](config/examples/board-of-directors.yaml) for a full example.
+Council is configured entirely via YAML. See [`config/examples/board-of-directors.yaml`](config/examples/board-of-directors.yaml) for a complete working example.
 
-Key sections:
+```yaml
+council:
+  name: "Product Strategy Board"
+
+  agents:
+    - id: cto
+      role: "Chief Technology Officer"
+      expertise: [architecture, security, scalability]
+      can_veto: true
+      voting_weight: 1.5
+      system_prompt: "You are the CTO..."
+
+  rules:
+    quorum: 3
+    voting_threshold: 0.66
+    voting_scheme:
+      type: supermajority
+      preset: two_thirds
+    enable_refinement: true
+    escalation:
+      - name: "deadlock_retry"
+        trigger: { type: deadlock }
+        action: { type: restart_discussion }
+
+  event_routing:
+    - match: { source: github, type: issues.opened, labels: [bug] }
+      assign: { lead: cto, consult: [cpo] }
+```
+
+### Config Sections
 
 | Section | Purpose |
 |---------|---------|
-| `council.agents` | Agent personas with roles, expertise, voting weights, veto power, and system prompts |
-| `council.rules` | Quorum, voting threshold, max rounds, human approval, voting scheme, refinement settings |
-| `council.rules.escalation` | Escalation rules: triggers (deadlock, timeout, veto, quorum, max rounds) and actions (escalate, restart, auto-decide, add agent, notify) |
-| `council.event_routing` | Map incoming events to lead/consult agents by source, type, and labels |
-| `council.communication_graph` | Control which agents can message each other (broadcast or graph) |
-| `council.spawner` | How agents are launched: `log` (dev), `webhook`, or `sdk` (production) |
+| `council.agents` | Agent personas — roles, expertise, voting weights, veto power, system prompts |
+| `council.rules` | Governance — quorum, threshold, voting scheme, refinement, max rounds |
+| `council.rules.escalation` | Auto-escalation on deadlock, timeout, veto, quorum failure, or max rounds |
+| `council.event_routing` | Route events to lead/consult agents by source, type, and labels |
+| `council.communication_graph` | Control which agents can message each other |
+| `council.spawner` | Agent launch mode: `log` (dev), `webhook`, or `sdk` (production) |
+
+### Voting Schemes
+
+| Scheme | How It Works |
+|--------|-------------|
+| `weighted_majority` | Weighted votes, passes at threshold (default) |
+| `supermajority` | Requires 2/3 or 3/4 majority, or custom threshold |
+| `unanimous` | Every non-abstaining voter must approve |
+| `consent_based` | Passes unless someone formally objects |
+| `advisory` | Non-binding — always passes, results are informational |
+
+### Escalation Rules
+
+Escalation rules fire automatically during deliberation when things go sideways.
+
+| Trigger | Fires When |
+|---------|-----------|
+| `deadlock` | Votes are split with no clear winner |
+| `quorum_not_met` | Not enough agents voted |
+| `veto_exercised` | An agent with veto power blocked the proposal |
+| `timeout` | A phase exceeded its time limit |
+| `max_rounds_exceeded` | Too many deliberation rounds |
+
+| Action | What It Does |
+|--------|-------------|
+| `escalate_to_human` | Flags the session for human review |
+| `restart_discussion` | Resets deliberation for another round |
+| `add_agent` | Brings in an additional agent |
+| `auto_decide` | Forces a decision (approve/reject/escalated) |
+| `notify_external` | Sends a webhook to an external service |
+
+Rules support `priority` ordering, `stop_after` to halt after the first match, and `max_fires_per_session`.
 
 ## Architecture
 
 ```
-External Events → Webhook Ingestion → Event Router → Agent Spawner
-                                                  ↓
-                    MCP Server ← External Agents (Claude Code/Cowork)
-                        ↓
-                   Orchestrator (state machine)
-                        ↓
-              Message Bus / Voting / Decisions
-                        ↓
-              Web UI (human review) + REST API + WebSocket
+src/
+  engine/    Pure logic — orchestrator, voting, escalation, spawner, message bus
+  server/    HTTP layer — Express 5 routes, MCP server, WebSocket, auth, DB
+  web/       Frontend — Preact + Vite dashboard
+  shared/    Types, Zod schemas, event definitions (imported by all layers)
 ```
 
-### Endpoints
+### REST API
 
 | Endpoint | Purpose |
 |----------|---------|
-| `POST /webhooks/github` | GitHub webhook receiver |
+| `POST /webhooks/github` | GitHub webhook receiver (HMAC verified) |
 | `POST /webhooks/ingest` | Generic webhook receiver |
-| `/mcp` (POST/GET/DELETE) | MCP Streamable HTTP for agent connections |
 | `GET /api/sessions` | List deliberation sessions |
-| `GET /api/sessions/:id` | Get session with messages, votes, decision |
-| `POST /api/sessions` | Create manual session |
+| `GET /api/sessions/:id` | Session details with messages, votes, decision |
+| `POST /api/sessions` | Create a manual session |
 | `POST /api/sessions/:id/review` | Submit human review |
 | `GET /api/events` | List incoming events |
-| `GET /api/agents` | List agent statuses |
+| `GET /api/agents` | List agent connection statuses |
 | `GET /api/decisions` | List pending decisions |
 | `ws://host/ws` | WebSocket for real-time UI updates |
 
-### MCP Tools (agent-facing)
+### MCP Tools (Agent-Facing)
+
+Agents connect to `/mcp` via Streamable HTTP and use these tools:
 
 | Tool | Description |
 |------|-------------|
-| `council_get_context` | Get pending tasks, messages, and sessions |
-| `council_get_session` | Get full session details |
-| `council_send_message` | Send message to agent or broadcast |
+| `council_get_context` | Get pending tasks, messages, and session state |
+| `council_get_session` | Full session details including votes and phase |
+| `council_send_message` | Message an agent or broadcast (graph-enforced) |
 | `council_consult_agent` | Request input from another board member |
-| `council_create_proposal` | Create a formal proposal |
+| `council_create_proposal` | Create a formal proposal for deliberation |
 | `council_submit_findings` | Submit investigation results |
-| `council_cast_vote` | Vote approve/reject/abstain with reasoning (values depend on voting scheme) |
+| `council_cast_vote` | Vote with reasoning (values depend on voting scheme) |
+| `council_propose_amendment` | Propose a change to the active proposal |
+| `council_resolve_amendment` | Accept or reject an amendment (lead agent) |
+| `council_get_voting_info` | Get the voting scheme and valid vote values |
 | `council_list_sessions` | List sessions with optional filters |
 | `council_list_councils` | List available councils |
-| `council_propose_amendment` | Propose an amendment to the active proposal during refinement |
-| `council_resolve_amendment` | Accept or reject a proposed amendment (lead agent only) |
-| `council_get_voting_info` | Get the voting scheme and valid vote values for a council |
 
-## Environment variables
+### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `3000` | Server port |
 | `HOST` | `0.0.0.0` | Server host |
 | `DB_PATH` | `./data/council.db` | SQLite database path |
-| `CONFIG_PATH` | (none) | Path to council YAML config |
+| `CONFIG_PATH` | — | Path to council YAML config |
 | `MCP_BASE_URL` | `http://localhost:3000/mcp` | URL agents use to connect back |
-| `COUNCIL_PASSWORD` | (none) | Password for web UI authentication (disabled if unset) |
-| `GITHUB_WEBHOOK_SECRET` | (none) | GitHub webhook HMAC secret |
+| `COUNCIL_PASSWORD` | — | Web UI password (auth disabled if unset) |
+| `GITHUB_WEBHOOK_SECRET` | — | GitHub webhook HMAC secret |
 
-## Agent spawner modes
+## Tech Stack
 
-| Mode | Config | Use case |
-|------|--------|----------|
-| `log` | `spawner.type: log` | Development - logs spawn requests, connect agents manually |
-| `webhook` | `spawner.type: webhook` | Posts spawn requests to a webhook URL |
-| `sdk` | `spawner.type: sdk` | Production - uses Claude Agent SDK to spawn agents |
+| | |
+|---|---|
+| **Runtime** | Node.js 22+, TypeScript 5.7+ |
+| **Server** | Express 5 |
+| **Frontend** | Preact + Vite |
+| **Database** | SQLite (better-sqlite3 + Drizzle ORM) |
+| **Agent Protocol** | MCP (Model Context Protocol) via @modelcontextprotocol/sdk |
+| **Agent Spawning** | Claude Agent SDK or webhook-based |
+| **Testing** | Vitest — 163 tests |
 
-## Voting schemes
+## Contributing
 
-Configure `rules.voting_scheme` in YAML to change how votes are tallied. Defaults to `weighted_majority`.
+Contributions are welcome! Council is early-stage and there's a lot of surface area to improve.
 
-| Scheme | Description |
-|--------|-------------|
-| `weighted_majority` | Weighted votes, passes if approval ratio >= threshold |
-| `supermajority` | Requires a supermajority (preset: `two_thirds` or `three_quarters`, or custom `threshold`) |
-| `unanimous` | All non-abstaining voters must approve |
-| `consent_based` | Passes unless someone formally objects (vote values: consent/object/abstain) |
-| `advisory` | Non-binding — always passes, results are informational |
+**Good first areas:**
 
-## Escalation rules
+- **New voting schemes** — implement the `VotingScheme` interface in `src/engine/voting-schemes/`
+- **New escalation actions** — add handlers in `src/engine/escalation-engine.ts`
+- **Web UI improvements** — the Preact dashboard in `src/web/` could use polish
+- **New spawner backends** — add alternatives to Claude SDK in `src/engine/spawner.ts`
+- **Documentation** — examples, tutorials, and guides
 
-Escalation rules in `rules.escalation` fire automatically when conditions are met during deliberation.
+### Development workflow
 
-**Triggers**: `deadlock`, `quorum_not_met`, `veto_exercised`, `timeout` (with `timeout_seconds` and `phases`), `max_rounds_exceeded`
+```bash
+pnpm install          # Install dependencies
+pnpm dev              # Start dev server with hot reload
+pnpm test             # Run test suite
+npx tsc --noEmit      # Type check
+```
 
-**Actions**: `escalate_to_human`, `restart_discussion`, `add_agent`, `auto_decide` (with `forced_outcome`), `notify_external` (with `webhook_url`)
+### Submitting changes
 
-Rules support `priority` ordering, `stop_after` to halt after first match, and `max_fires_per_session` to limit how many times a rule can fire.
-
-## Refinement phase
-
-When `rules.enable_refinement` is `true` (default), proposals enter a refinement phase after discussion where agents can propose amendments. The lead agent accepts or rejects each amendment before the proposal moves to voting.
-
-Configure with `rules.max_amendments` (default: 10) and `rules.amendment_resolution` (`lead_resolves` or `auto_accept`).
-
-## Schema migrations
-
-The SQLite database automatically migrates on startup. When new columns are added in updates, `ALTER TABLE ADD COLUMN` migrations run after `CREATE TABLE IF NOT EXISTS`, using `PRAGMA table_info()` to detect missing columns. Existing data is preserved.
-
-## Tech stack
-
-- **Runtime**: Node.js 22+, TypeScript 5.7+
-- **Server**: Express 5
-- **Frontend**: Preact + Vite
-- **Database**: SQLite (better-sqlite3 + Drizzle ORM)
-- **MCP**: @modelcontextprotocol/sdk v1.26+
-- **Testing**: Vitest
+1. Fork the repo and create a feature branch
+2. Make your changes with tests
+3. Run `pnpm test` and `npx tsc --noEmit`
+4. Open a PR with a summary and test plan
 
 ## License
 
