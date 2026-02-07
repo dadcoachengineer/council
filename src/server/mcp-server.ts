@@ -7,20 +7,11 @@ import { Router as createRouter } from 'express';
 import type { Orchestrator } from '../engine/orchestrator.js';
 
 /**
- * Create the MCP server with all agent-facing tools and return
- * an Express router for the /mcp endpoint.
+ * Register all agent-facing tools on an McpServer instance.
+ * Called once per MCP session so each client gets its own server.
  */
-export function createMcpRouter(orchestrator: Orchestrator): Router {
-  const router = createRouter();
-  const transports = new Map<string, StreamableHTTPServerTransport>();
+function registerTools(server: McpServer, orchestrator: Orchestrator): void {
   const registry = orchestrator.getAgentRegistry();
-
-  const server = new McpServer({
-    name: 'council',
-    version: '0.1.0',
-  }, {
-    instructions: 'Council MCP server. Connect with your agent token to participate in deliberations.',
-  });
 
   // ── Tool: council_get_context ──
   server.registerTool(
@@ -295,6 +286,35 @@ export function createMcpRouter(orchestrator: Orchestrator): Router {
     },
   );
 
+}
+
+/**
+ * Create a fresh McpServer with all tools registered.
+ * Each MCP session gets its own server instance because
+ * McpServer only supports a single transport connection.
+ */
+function createServerInstance(orchestrator: Orchestrator): McpServer {
+  const server = new McpServer({
+    name: 'council',
+    version: '0.1.0',
+  }, {
+    instructions: 'Council MCP server. Connect with your agent token to participate in deliberations.',
+  });
+  registerTools(server, orchestrator);
+  return server;
+}
+
+/**
+ * Create the MCP Express router for the /mcp endpoint.
+ * Supports multiple concurrent agent connections, each with
+ * its own McpServer + StreamableHTTPServerTransport pair.
+ */
+export function createMcpRouter(orchestrator: Orchestrator): Router {
+  const router = createRouter();
+  const transports = new Map<string, StreamableHTTPServerTransport>();
+  const servers = new Map<string, McpServer>();
+  const registry = orchestrator.getAgentRegistry();
+
   // ── Express routes ──
 
   router.post('/', async (req: Request, res: Response) => {
@@ -304,10 +324,12 @@ export function createMcpRouter(orchestrator: Orchestrator): Router {
     if (sessionId && transports.has(sessionId)) {
       transport = transports.get(sessionId)!;
     } else if (!sessionId) {
+      const server = createServerInstance(orchestrator);
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {
           transports.set(id, transport);
+          servers.set(id, server);
           // Try to identify the agent from the init request
           const token = req.headers['x-agent-token'] as string | undefined;
           if (token) {
@@ -319,6 +341,7 @@ export function createMcpRouter(orchestrator: Orchestrator): Router {
         },
         onsessionclosed: (id) => {
           transports.delete(id);
+          servers.delete(id);
         },
       });
       await server.connect(transport);
@@ -347,6 +370,7 @@ export function createMcpRouter(orchestrator: Orchestrator): Router {
     }
     await transports.get(sessionId)!.handleRequest(req, res);
     transports.delete(sessionId);
+    servers.delete(sessionId);
   });
 
   return router;
