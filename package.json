@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Multi-agent MCP orchestrator modeled as a corporate governance board",
   "type": "module",
+  "packageManager": "pnpm@10.28.2",
   "engines": {
     "node": ">=22.0.0"
   },
