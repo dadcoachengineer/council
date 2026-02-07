@@ -215,7 +215,7 @@ council:
   if (existsSync(webDistPath)) {
     council.app.use(express.static(webDistPath));
     // SPA fallback
-    council.app.get('*', (_req, res) => {
+    council.app.get('{*path}', (_req, res) => {
       res.sendFile(resolve(webDistPath, 'index.html'));
     });
     console.log(`[COUNCIL] Serving web UI from ${webDistPath}`);
