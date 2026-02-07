@@ -32,6 +32,55 @@
       min-height: 100vh;
     }
     #app { min-height: 100vh; }
+
+    /* App layout */
+    .app-layout {
+      display: flex;
+      min-height: 100vh;
+    }
+    .sidebar {
+      width: 220px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 20px 0;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .main-content {
+      flex: 1;
+      padding: 24px;
+      overflow: auto;
+    }
+
+    /* Session detail grid */
+    .session-grid {
+      display: grid;
+      grid-template-columns: 1fr 300px;
+      gap: 20px;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .app-layout {
+        flex-direction: column;
+      }
+      .sidebar {
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        padding: 12px 0;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .main-content {
+        padding: 16px;
+      }
+      .session-grid {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 </head>
 <body>

@@ -13,9 +13,11 @@ import { createSpawner } from '../engine/spawner.js';
 import { Orchestrator } from '../engine/orchestrator.js';
 import { EscalationEngine } from '../engine/escalation-engine.js';
 import { createDb, DbStore } from './db.js';
+import { UserStore } from './user-store.js';
 import { createMcpRouter } from './mcp-server.js';
 import { createWebhookRouter } from './webhooks.js';
 import { createApiRouter } from './api.js';
+import { createAdminRouter } from './admin-api.js';
 import { setupWebSocket } from './ws.js';
 import { createAuth } from './auth.js';
 import type { CouncilConfig } from '../shared/types.js';
@@ -25,7 +27,6 @@ const HOST = process.env.HOST ?? '0.0.0.0';
 const DB_PATH = process.env.DB_PATH ?? './data/council.db';
 const CONFIG_PATH = process.env.CONFIG_PATH;
 const MCP_BASE_URL = process.env.MCP_BASE_URL ?? `http://localhost:${PORT}/mcp`;
-const COUNCIL_PASSWORD = process.env.COUNCIL_PASSWORD;
 
 // ── createApp factory ──
 
@@ -34,7 +35,6 @@ export interface CreateAppOptions {
   config: CouncilConfig;
   councilId?: string;
   mcpBaseUrl?: string;
-  password?: string;
 }
 
 export interface CouncilApp {
@@ -42,6 +42,7 @@ export interface CouncilApp {
   httpServer: HttpServer;
   orchestrator: Orchestrator;
   store: DbStore;
+  userStore: UserStore;
   councilId: string;
   close: () => Promise<void>;
 }
@@ -49,6 +50,7 @@ export interface CouncilApp {
 export function createApp(opts: CreateAppOptions): CouncilApp {
   const { db, sqlite } = createDb(opts.dbPath);
   const store = new DbStore(db);
+  const userStore = new UserStore(db);
   const config = opts.config;
   const councilId = opts.councilId ?? nanoid();
   const mcpBaseUrl = opts.mcpBaseUrl ?? 'http://localhost:3000/mcp';
@@ -106,26 +108,25 @@ export function createApp(opts: CreateAppOptions): CouncilApp {
   // MCP endpoint (no auth — agents use their own token-based auth)
   app.use('/mcp', createMcpRouter(orchestrator));
 
-  // ── Auth (optional) ──
-  const auth = createAuth(opts.password);
-  if (auth) {
-    app.post('/auth/login', auth.login);
-    app.post('/auth/logout', auth.logout);
-    app.get('/auth/check', auth.protect, (_req, res) => {
-      res.json({ authenticated: true });
-    });
-  }
+  // ── Auth ──
+  const auth = createAuth(userStore);
+
+  // Global authenticate middleware (non-blocking — sets req.user)
+  app.use(auth.authenticate);
+
+  // Auth routes
+  app.use('/auth', auth.router);
 
   // Health endpoint — always public
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', uptime: process.uptime() });
   });
 
-  // REST API (protected if auth enabled)
-  if (auth) {
-    app.use('/api', auth.protect);
-  }
-  app.use('/api', createApiRouter(orchestrator, store));
+  // Admin routes (require admin role)
+  app.use('/api/admin', auth.protect, auth.requireAdmin, createAdminRouter(userStore));
+
+  // REST API (protected)
+  app.use('/api', auth.protect, createApiRouter(orchestrator, store));
 
   // ── HTTP + WebSocket ──
   const httpServer = createServer(app);
@@ -141,7 +142,7 @@ export function createApp(opts: CreateAppOptions): CouncilApp {
     });
   };
 
-  return { app, httpServer, orchestrator, store, councilId, close };
+  return { app, httpServer, orchestrator, store, userStore, councilId, close };
 }
 
 // ── main ──
@@ -204,7 +205,6 @@ council:
     config,
     councilId,
     mcpBaseUrl: MCP_BASE_URL,
-    password: COUNCIL_PASSWORD,
   });
 
   console.log(`[COUNCIL] Council: ${council.councilId}`);

@@ -6,14 +6,20 @@ import { DecisionReview } from './components/DecisionReview.js';
 import { EventLog } from './components/EventLog.js';
 import { AgentStatus } from './components/AgentStatus.js';
 import { LoginPage } from './components/LoginPage.js';
-import type { Session, Decision, IncomingEvent, AgentStatus as AgentStatusType } from '../shared/types.js';
+import { SetupPage } from './components/SetupPage.js';
+import { TwoFactorPage } from './components/TwoFactorPage.js';
+import { UserManagement } from './components/UserManagement.js';
+import { AccountSettings } from './components/AccountSettings.js';
+import type { Session, Decision, IncomingEvent, AgentStatus as AgentStatusType, PublicUser } from '../shared/types.js';
 import type { WsEvent } from '../shared/events.js';
 
-type View = 'sessions' | 'session' | 'decisions' | 'events' | 'agents';
-type AuthState = 'checking' | 'login' | 'authenticated';
+type View = 'sessions' | 'session' | 'decisions' | 'events' | 'agents' | 'users' | 'account';
+type AuthState = 'checking' | 'setup' | 'login' | '2fa' | 'authenticated';
 
 function App() {
   const [authState, setAuthState] = useState<AuthState>('checking');
+  const [currentUser, setCurrentUser] = useState<PublicUser | null>(null);
+  const [pendingSession, setPendingSession] = useState<string>('');
   const [view, setView] = useState<View>('sessions');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -26,22 +32,28 @@ function App() {
 
   // ── Auth check ──
   useEffect(() => {
-    fetch('/auth/check')
-      .then((res) => {
-        if (res.ok) {
+    fetch('/auth/me')
+      .then(async (res) => {
+        const data = await res.json();
+        if (data.needsSetup) {
+          setAuthState('setup');
+        } else if (data.authenticated && data.user) {
+          setCurrentUser(data.user);
           setAuthState('authenticated');
-        } else if (res.status === 401) {
-          setAuthState('login');
         } else {
-          // No auth configured (404) — proceed without login
-          setAuthState('authenticated');
+          setAuthState('login');
         }
       })
       .catch(() => {
-        // Network error or no auth endpoint — proceed without login
-        setAuthState('authenticated');
+        setAuthState('login');
       });
   }, []);
+
+  const handleLogout = async () => {
+    await fetch('/auth/logout', { method: 'POST' });
+    setCurrentUser(null);
+    setAuthState('login');
+  };
 
   // Fetch initial data
   const fetchSessions = useCallback(async () => {
@@ -141,37 +153,50 @@ function App() {
     };
   }, [authState]);
 
-  const navItems: { key: View; label: string; count?: number }[] = [
+  const navItems: { key: View; label: string; count?: number; adminOnly?: boolean }[] = [
     { key: 'sessions', label: 'Sessions', count: sessions.length },
     { key: 'decisions', label: 'Decisions', count: decisions.length },
     { key: 'events', label: 'Events', count: events.length },
     { key: 'agents', label: 'Agents', count: agents.length },
+    { key: 'users', label: 'Users', adminOnly: true },
+    { key: 'account', label: 'Account' },
   ];
 
   if (authState === 'checking') {
     return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', color: 'var(--text-dim)' }}>Loading...</div>;
   }
 
+  if (authState === 'setup') {
+    return <SetupPage onSetupComplete={(user) => { setCurrentUser(user); setAuthState('authenticated'); }} />;
+  }
+
   if (authState === 'login') {
-    return <LoginPage onLogin={() => setAuthState('authenticated')} />;
+    return <LoginPage
+      onLogin={(user) => { setCurrentUser(user); setAuthState('authenticated'); }}
+      onRequires2fa={(ps) => { setPendingSession(ps); setAuthState('2fa'); }}
+    />;
+  }
+
+  if (authState === '2fa') {
+    return <TwoFactorPage
+      pendingSession={pendingSession}
+      onVerified={(user) => { setCurrentUser(user); setAuthState('authenticated'); }}
+      onBack={() => setAuthState('login')}
+    />;
   }
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh' }}>
+    <div class="app-layout">
       {/* Sidebar */}
-      <nav style={{
-        width: 220,
-        background: 'var(--surface)',
-        borderRight: '1px solid var(--border)',
-        padding: '20px 0',
-        flexShrink: 0,
-      }}>
+      <nav class="sidebar">
         <div style={{ padding: '0 20px 20px', borderBottom: '1px solid var(--border)' }}>
           <h1 style={{ fontSize: 18, fontWeight: 700, color: 'var(--accent)' }}>Council</h1>
           <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 4 }}>Multi-Agent Orchestrator</p>
         </div>
-        <div style={{ padding: '12px 8px' }}>
-          {navItems.map((item) => (
+        <div style={{ padding: '12px 8px', flex: 1 }}>
+          {navItems
+            .filter((item) => !item.adminOnly || currentUser?.role === 'admin')
+            .map((item) => (
             <button
               key={item.key}
               onClick={() => { setView(item.key); setSelectedSessionId(null); }}
@@ -206,10 +231,28 @@ function App() {
             </button>
           ))}
         </div>
+        <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 8 }}>
+            {currentUser?.displayName}
+          </div>
+          <button
+            onClick={handleLogout}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-dim)',
+              cursor: 'pointer',
+              fontSize: 13,
+              padding: 0,
+            }}
+          >
+            Sign out
+          </button>
+        </div>
       </nav>
 
       {/* Main content */}
-      <main style={{ flex: 1, padding: 24, overflow: 'auto' }}>
+      <main class="main-content">
         {view === 'sessions' && !selectedSessionId && (
           <SessionList
             sessions={sessions}
@@ -228,6 +271,15 @@ function App() {
         )}
         {view === 'events' && <EventLog events={events} />}
         {view === 'agents' && <AgentStatus agents={agents} />}
+        {view === 'users' && currentUser && (
+          <UserManagement currentUser={currentUser} />
+        )}
+        {view === 'account' && currentUser && (
+          <AccountSettings
+            currentUser={currentUser}
+            onUserUpdated={(user) => setCurrentUser(user)}
+          />
+        )}
       </main>
     </div>
   );

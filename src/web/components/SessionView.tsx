@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'preact/hooks';
 import { MessageThread } from './MessageThread.js';
+import { VoteBar } from './VoteBar.js';
 import type { Session, Message, Vote, Decision } from '../../shared/types.js';
 
 interface SessionData {
@@ -44,6 +45,10 @@ export function SessionView({ sessionId, refreshKey, onBack }: Props) {
   const { session, messages, votes, decision } = data;
   const amendments = messages.filter((m) => m.messageType === 'amendment');
 
+  // Estimate total agents from unique voters + any additional known agents
+  const uniqueVoters = new Set(votes.map((v) => v.agentId));
+  const totalAgents = Math.max(uniqueVoters.size, votes.length > 0 ? uniqueVoters.size : 2);
+
   return (
     <div>
       <button
@@ -86,13 +91,21 @@ export function SessionView({ sessionId, refreshKey, onBack }: Props) {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20 }}>
+      <div class="session-grid">
         <div>
           <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Messages</h3>
           <MessageThread messages={messages} />
         </div>
 
         <div>
+          {/* Vote Bar */}
+          {votes.length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Vote Distribution</h3>
+              <VoteBar votes={votes} totalAgents={totalAgents} />
+            </div>
+          )}
+
           {/* Votes */}
           <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Votes</h3>
           {votes.length === 0 ? (

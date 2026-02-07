@@ -10,5 +10,5 @@ export default defineConfig({
   clean: true,
   dts: false,
   splitting: false,
-  external: ['better-sqlite3'],
+  external: ['better-sqlite3', 'bcrypt'],
 });
