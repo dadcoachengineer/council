@@ -52,6 +52,7 @@ function App() {
   const handleLogout = async () => {
     await fetch('/auth/logout', { method: 'POST' });
     setCurrentUser(null);
+    setView('sessions');
     setAuthState('login');
   };
 
