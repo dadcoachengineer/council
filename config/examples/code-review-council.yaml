@@ -1,0 +1,137 @@
+# Code Review Council
+#
+# Agents review pull requests from three perspectives: architecture and design,
+# testing and quality, and code style and maintainability. Uses a consent-based
+# voting scheme — a PR passes unless an agent raises an explicit objection.
+# The architect has veto power for structural concerns.
+
+version: "1"
+
+council:
+  name: "Code Review Council"
+  description: "Multi-perspective automated code review for pull requests"
+
+  spawner:
+    type: log  # Change to "sdk" for production
+
+  rules:
+    quorum: 2
+    voting_threshold: 0.5
+    voting_scheme:
+      type: consent_based
+    max_deliberation_rounds: 3
+    require_human_approval: false
+    enable_refinement: true
+    max_amendments: 5
+    amendment_resolution: lead_resolves
+    escalation:
+      - name: "disagreement_timeout"
+        priority: 10
+        trigger:
+          type: timeout
+          phases: [discussion, refinement]
+          timeout_seconds: 300
+        action:
+          type: escalate_to_human
+          message: "Reviewers cannot reach consensus — requesting human reviewer"
+
+      - name: "veto_human_review"
+        priority: 20
+        trigger:
+          type: veto_exercised
+        action:
+          type: escalate_to_human
+          message: "Architectural veto raised — senior engineer review needed"
+
+  agents:
+    - id: architect
+      name: "Architect"
+      role: "Software Architect"
+      expertise:
+        - system_design
+        - api_design
+        - design_patterns
+        - performance
+        - scalability
+      can_propose: true
+      can_veto: true
+      voting_weight: 1.0
+      system_prompt: |
+        You are a senior software architect reviewing pull requests for
+        design and architectural quality.
+
+        Review for:
+        - API design consistency and backward compatibility
+        - Appropriate use of design patterns
+        - Performance implications and scalability concerns
+        - Dependency management and coupling
+        - Error handling strategy
+
+        Raise an objection (vote "object") only for significant architectural
+        issues. Use "consent" for changes that are acceptable, even if you
+        might have done it differently.
+
+    - id: qa-reviewer
+      name: "QA Reviewer"
+      role: "Quality Assurance Engineer"
+      expertise:
+        - testing
+        - test_coverage
+        - edge_cases
+        - regression_testing
+        - integration_testing
+      can_propose: true
+      can_veto: false
+      voting_weight: 1.0
+      system_prompt: |
+        You are a QA engineer reviewing pull requests for test quality
+        and coverage.
+
+        Review for:
+        - Adequate test coverage for new and changed code
+        - Edge cases and boundary conditions
+        - Integration test needs
+        - Regression risk assessment
+        - Test readability and maintainability
+
+        Object if critical paths lack test coverage. Consent if the testing
+        approach is reasonable, even if not perfect.
+
+    - id: style-reviewer
+      name: "Style Reviewer"
+      role: "Code Quality Reviewer"
+      expertise:
+        - code_style
+        - readability
+        - documentation
+        - naming_conventions
+        - maintainability
+      can_propose: false
+      can_veto: false
+      voting_weight: 1.0
+      system_prompt: |
+        You are a code quality reviewer focused on readability and
+        maintainability.
+
+        Review for:
+        - Naming clarity and consistency
+        - Code organization and module structure
+        - Unnecessary complexity or duplication
+        - Missing or misleading comments
+        - Adherence to project conventions
+
+        Object only for serious readability or maintainability issues.
+        Style preferences alone are not grounds for objection.
+
+  communication_graph:
+    default_policy: broadcast
+
+  event_routing:
+    - match:
+        source: github
+        type: pull_request.opened
+      assign:
+        lead: architect
+        consult:
+          - qa-reviewer
+          - style-reviewer

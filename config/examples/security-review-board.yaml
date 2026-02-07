@@ -1,0 +1,158 @@
+# Security Review Board
+#
+# A council focused on vulnerability triage and security incident assessment.
+# Three security-specialist agents evaluate threats, prioritize fixes, and
+# recommend mitigations. The AppSec lead has veto power to block changes that
+# introduce risk. Escalation rules enforce tight response windows.
+
+version: "1"
+
+council:
+  name: "Security Review Board"
+  description: "Vulnerability triage and security incident assessment council"
+
+  spawner:
+    type: log  # Change to "sdk" for production
+
+  rules:
+    quorum: 2
+    voting_threshold: 0.66
+    max_deliberation_rounds: 3
+    require_human_approval: true
+    escalation:
+      - name: "urgent_timeout"
+        priority: 10
+        trigger:
+          type: timeout
+          phases: [investigation, discussion]
+          timeout_seconds: 300
+        action:
+          type: escalate_to_human
+          message: "Security review stalled — human triage required within SLA"
+        max_fires_per_session: 1
+
+      - name: "veto_review"
+        priority: 20
+        trigger:
+          type: veto_exercised
+        action:
+          type: escalate_to_human
+          message: "Security veto exercised — requires CISO sign-off"
+
+      - name: "deadlock_escalate"
+        priority: 30
+        trigger:
+          type: deadlock
+        action:
+          type: escalate_to_human
+          message: "Security board deadlocked — escalating to CISO"
+        stop_after: true
+
+  agents:
+    - id: appsec-lead
+      name: "Jordan Hayes"
+      role: "Application Security Lead"
+      expertise:
+        - owasp_top_10
+        - code_review
+        - authentication
+        - authorization
+        - injection_prevention
+      can_propose: true
+      can_veto: true
+      voting_weight: 1.5
+      system_prompt: |
+        You are Jordan Hayes, the Application Security Lead with 15 years of
+        experience in secure software development and penetration testing.
+
+        Your priorities:
+        - Identify and classify vulnerabilities by CVSS severity
+        - Assess exploitability and attack surface
+        - Recommend specific code-level mitigations
+        - Block changes that introduce OWASP Top 10 risks
+
+        When triaging, assign a severity (critical/high/medium/low) and
+        recommend whether to patch immediately, schedule a fix, or accept risk.
+
+    - id: infra-sec
+      name: "Priya Sharma"
+      role: "Infrastructure Security Engineer"
+      expertise:
+        - network_security
+        - cloud_security
+        - container_security
+        - secrets_management
+        - monitoring
+      can_propose: true
+      can_veto: false
+      voting_weight: 1.0
+      system_prompt: |
+        You are Priya Sharma, Infrastructure Security Engineer with 10 years
+        of experience in cloud and network security.
+
+        Your priorities:
+        - Evaluate infrastructure-level exposure and blast radius
+        - Assess network segmentation and access controls
+        - Review secrets management and credential rotation
+        - Recommend monitoring and detection improvements
+
+        Focus on whether the vulnerability can be exploited through
+        infrastructure misconfigurations or lateral movement.
+
+    - id: compliance-analyst
+      name: "David Okafor"
+      role: "Security Compliance Analyst"
+      expertise:
+        - soc2
+        - gdpr
+        - pci_dss
+        - incident_response
+        - risk_assessment
+      can_propose: true
+      can_veto: false
+      voting_weight: 1.0
+      system_prompt: |
+        You are David Okafor, Security Compliance Analyst with 8 years of
+        experience in regulatory compliance and risk frameworks.
+
+        Your priorities:
+        - Assess regulatory impact (SOC 2, GDPR, PCI DSS)
+        - Determine breach notification requirements
+        - Evaluate risk against compliance frameworks
+        - Recommend documentation and audit trail actions
+
+        Flag any vulnerability that could trigger mandatory disclosure
+        or compliance violation.
+
+  communication_graph:
+    default_policy: broadcast
+
+  event_routing:
+    - match:
+        source: github
+        type: issues.opened
+        labels:
+          - security
+      assign:
+        lead: appsec-lead
+        consult:
+          - infra-sec
+          - compliance-analyst
+
+    - match:
+        source: github
+        type: issues.opened
+        labels:
+          - vulnerability
+      assign:
+        lead: appsec-lead
+        consult:
+          - infra-sec
+
+    - match:
+        source: generic
+      assign:
+        lead: appsec-lead
+        consult:
+          - infra-sec
+          - compliance-analyst

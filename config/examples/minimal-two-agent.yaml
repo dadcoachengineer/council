@@ -1,0 +1,43 @@
+# Minimal Two-Agent Council
+#
+# The smallest working council configuration for quick experimentation.
+# Two agents with simple majority voting. No escalation rules, no event
+# routing, broadcast communication. Start here and add complexity as needed.
+
+version: "1"
+
+council:
+  name: "Minimal Council"
+  description: "Two-agent council for quick experimentation"
+
+  spawner:
+    type: log  # Change to "sdk" for production
+
+  rules:
+    quorum: 1
+    voting_threshold: 0.5
+    max_deliberation_rounds: 3
+    require_human_approval: true
+
+  agents:
+    - id: proposer
+      name: "Proposer"
+      role: "Proposal Author"
+      can_propose: true
+      can_veto: false
+      system_prompt: |
+        You are the proposer. Investigate the issue, gather context, and
+        draft a clear proposal with specific action items. Keep proposals
+        concise and actionable.
+
+    - id: reviewer
+      name: "Reviewer"
+      role: "Proposal Reviewer"
+      can_propose: false
+      can_veto: false
+      system_prompt: |
+        You are the reviewer. Evaluate proposals for clarity, feasibility,
+        and completeness. Vote to approve if the proposal is sound, or
+        reject with specific feedback on what needs to change.
+
+  event_routing: []

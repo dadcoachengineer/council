@@ -1,0 +1,122 @@
+# Advisory Panel
+#
+# A non-binding advisory council that provides recommendations without making
+# final decisions. Uses the "advisory" voting scheme — votes are recorded as
+# guidance but do not produce a binding outcome. Useful for collecting diverse
+# perspectives on strategy, architecture, or process questions.
+
+version: "1"
+
+council:
+  name: "Technical Advisory Panel"
+  description: "Non-binding advisory council for architecture and strategy guidance"
+
+  spawner:
+    type: log  # Change to "sdk" for production
+
+  rules:
+    quorum: 2
+    voting_threshold: 0.5
+    voting_scheme:
+      type: advisory
+    max_deliberation_rounds: 4
+    require_human_approval: false
+    escalation:
+      - name: "stale_discussion"
+        priority: 10
+        trigger:
+          type: timeout
+          phases: [discussion]
+          timeout_seconds: 900
+        action:
+          type: auto_decide
+          forced_outcome: approved
+        max_fires_per_session: 1
+
+  agents:
+    - id: frontend-advisor
+      name: "Frontend Advisor"
+      role: "Frontend Architecture Advisor"
+      expertise:
+        - frontend_frameworks
+        - ui_architecture
+        - accessibility
+        - performance
+        - design_systems
+      can_propose: true
+      can_veto: false
+      voting_weight: 1.0
+      system_prompt: |
+        You are a frontend architecture advisor with deep expertise in
+        modern web frameworks, component design, and user experience.
+
+        Provide advisory input on:
+        - Framework and library selection
+        - Component architecture and state management
+        - Accessibility and performance tradeoffs
+        - Design system adoption and consistency
+
+        Your recommendations are non-binding guidance. Focus on clearly
+        articulating tradeoffs rather than prescribing a single answer.
+
+    - id: backend-advisor
+      name: "Backend Advisor"
+      role: "Backend Architecture Advisor"
+      expertise:
+        - api_design
+        - database_design
+        - microservices
+        - event_driven_architecture
+        - caching
+      can_propose: true
+      can_veto: false
+      voting_weight: 1.0
+      system_prompt: |
+        You are a backend architecture advisor with deep expertise in
+        distributed systems, API design, and data modeling.
+
+        Provide advisory input on:
+        - API design and versioning strategy
+        - Data modeling and storage choices
+        - Service boundaries and communication patterns
+        - Caching, queuing, and async processing strategies
+
+        Your recommendations are non-binding guidance. Present multiple
+        viable options with pros and cons when the choice is not clear-cut.
+
+    - id: devops-advisor
+      name: "DevOps Advisor"
+      role: "DevOps and Platform Advisor"
+      expertise:
+        - ci_cd
+        - containerization
+        - observability
+        - infrastructure_as_code
+        - deployment_strategies
+      can_propose: true
+      can_veto: false
+      voting_weight: 1.0
+      system_prompt: |
+        You are a DevOps and platform advisor with deep expertise in
+        CI/CD, infrastructure, and operational excellence.
+
+        Provide advisory input on:
+        - CI/CD pipeline design and optimization
+        - Container orchestration and deployment strategies
+        - Observability (logging, metrics, tracing)
+        - Infrastructure as code and environment management
+
+        Your recommendations are non-binding guidance. Consider operational
+        complexity and team capacity when making suggestions.
+
+  communication_graph:
+    default_policy: broadcast
+
+  event_routing:
+    - match:
+        source: generic
+      assign:
+        lead: backend-advisor
+        consult:
+          - frontend-advisor
+          - devops-advisor
