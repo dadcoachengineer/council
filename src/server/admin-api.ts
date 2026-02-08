@@ -88,5 +88,43 @@ export function createAdminRouter(userStore: UserStore): Router {
     res.json({ status: 'deleted' });
   });
 
+  // ── API Keys ──
+
+  // POST /api/admin/api-keys — create API key for a user
+  router.post('/api-keys', async (req: Request, res: Response) => {
+    const { userId, name } = req.body;
+    if (!userId || !name) {
+      res.status(400).json({ error: 'Missing userId or name' });
+      return;
+    }
+
+    const user = userStore.getUserById(userId);
+    if (!user) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    const result = await userStore.createApiKey(userId, name);
+    res.status(201).json({ id: result.id, key: result.key, keyPrefix: result.keyPrefix, name });
+  });
+
+  // GET /api/admin/api-keys?userId=xxx — list keys for a user
+  router.get('/api-keys', (req: Request, res: Response) => {
+    const userId = String(req.query.userId ?? '');
+    if (!userId) {
+      res.status(400).json({ error: 'Missing userId query parameter' });
+      return;
+    }
+    const keys = userStore.listApiKeys(userId);
+    res.json(keys);
+  });
+
+  // DELETE /api/admin/api-keys/:id — revoke a key
+  router.delete('/api-keys/:id', (req: Request, res: Response) => {
+    const keyId = String(req.params.id);
+    userStore.deleteApiKey(keyId);
+    res.json({ status: 'deleted' });
+  });
+
   return router;
 }

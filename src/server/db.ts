@@ -110,6 +110,16 @@ export const agentTokens = sqliteTable('agent_tokens', {
   lastUsedAt: text('last_used_at'),
 });
 
+export const apiKeys = sqliteTable('api_keys', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  name: text('name').notNull(),
+  keyHash: text('key_hash').notNull(),
+  keyPrefix: text('key_prefix').notNull(),
+  createdAt: text('created_at').notNull(),
+  lastUsedAt: text('last_used_at'),
+});
+
 export const events = sqliteTable('events', {
   id: text('id').primaryKey(),
   councilId: text('council_id').notNull(),
@@ -267,6 +277,18 @@ export function createDb(dbPath: string): { db: DbClient; sqlite: BetterSqlite3.
     );
 
     CREATE INDEX IF NOT EXISTS idx_agent_tokens_token ON agent_tokens(token);
+
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id),
+      name TEXT NOT NULL,
+      key_hash TEXT NOT NULL,
+      key_prefix TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      last_used_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(key_prefix);
 
     CREATE TABLE IF NOT EXISTS escalation_events (
       id TEXT PRIMARY KEY,
