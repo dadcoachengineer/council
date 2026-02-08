@@ -26,6 +26,8 @@ Council is an orchestrator that lets AI agents debate, propose, refine, and vote
 - **Human-in-the-loop by default** — every decision can require human review before execution
 - **MCP-native** — agents connect as standard MCP clients, bringing their own tools and capabilities
 - **Zero-config agents** — define personas in YAML; Council handles spawning, routing, and state management
+- **Persistent agents** — agents can stay connected across sessions, receiving new assignments without re-spawning
+- **Multi-user auth** — session-based authentication with optional TOTP 2FA and role-based access control
 
 ## How It Works
 
@@ -68,6 +70,8 @@ CONFIG_PATH=config/examples/board-of-directors.yaml pnpm dev
 
 This spins up a 4-agent board (CTO, CPO, Legal, CFO) with escalation rules, veto power, and weighted voting.
 
+More example configs in [`config/examples/`](config/examples/): `minimal-two-agent`, `code-review-council`, `security-review-board`, `incident-response-team`, `advisory-panel`.
+
 ### Run tests
 
 ```bash
@@ -93,7 +97,6 @@ docker run -d \
   -v council-data:/app/data \
   -v $(pwd)/config:/app/config:ro \
   -e CONFIG_PATH=/app/config/examples/board-of-directors.yaml \
-  -e COUNCIL_PASSWORD=changeme \
   ghcr.io/dadcoachengineer/council:main
 ```
 
@@ -137,6 +140,7 @@ council:
       expertise: [architecture, security, scalability]
       can_veto: true
       voting_weight: 1.5
+      persistent: true          # Stay connected across sessions
       system_prompt: "You are the CTO..."
 
   rules:
@@ -166,6 +170,22 @@ council:
 | `council.event_routing` | Route events to lead/consult agents by source, type, and labels |
 | `council.communication_graph` | Control which agents can message each other |
 | `council.spawner` | Agent launch mode: `log` (dev), `webhook`, or `sdk` (production) |
+
+### Agent `persistent` Flag
+
+Agents with `persistent: true` stay connected across multiple sessions:
+- They receive a stable authentication token stored in the database
+- When a new session is created, the orchestrator notifies them via MCP instead of re-spawning
+- They can poll for assignments using the `council_get_assignments` tool
+- SDK-spawned persistent agents run in a loop, processing sessions from an internal queue
+
+### Manual Agent Example
+
+The [`examples/manual-agent.ts`](examples/manual-agent.ts) script demonstrates how to connect an external MCP client to Council as a standalone agent. Run it with:
+
+```bash
+npx tsx examples/manual-agent.ts
+```
 
 ### Voting Schemes
 
@@ -199,6 +219,15 @@ Escalation rules fire automatically during deliberation when things go sideways.
 
 Rules support `priority` ordering, `stop_after` to halt after the first match, and `max_fires_per_session`.
 
+## Authentication
+
+Council uses multi-user session-based authentication with optional TOTP two-factor authentication.
+
+- **First-run setup**: `POST /auth/setup` creates the initial admin user
+- **Login**: `POST /auth/login` returns a session cookie; supports optional TOTP verification via `POST /auth/2fa/verify`
+- **User management**: Admins can create and manage users at `/api/admin/users`
+- **MCP endpoint**: `/mcp` is exempt from auth — agents authenticate with their own `x-agent-token` header
+
 ## Architecture
 
 ```
@@ -222,6 +251,9 @@ src/
 | `GET /api/events` | List incoming events |
 | `GET /api/agents` | List agent connection statuses |
 | `GET /api/decisions` | List pending decisions |
+| `POST /auth/setup` | First-run admin user creation |
+| `POST /auth/login` | Login (returns session cookie) |
+| `GET /api/admin/users` | List users (admin only) |
 | `ws://host/ws` | WebSocket for real-time UI updates |
 
 ### MCP Tools (Agent-Facing)
@@ -242,6 +274,7 @@ Agents connect to `/mcp` via Streamable HTTP and use these tools:
 | `council_get_voting_info` | Get the voting scheme and valid vote values |
 | `council_list_sessions` | List sessions with optional filters |
 | `council_list_councils` | List available councils |
+| `council_get_assignments` | Get current session assignments (persistent agents) |
 
 ### Environment Variables
 
@@ -252,7 +285,6 @@ Agents connect to `/mcp` via Streamable HTTP and use these tools:
 | `DB_PATH` | `./data/council.db` | SQLite database path |
 | `CONFIG_PATH` | — | Path to council YAML config |
 | `MCP_BASE_URL` | `http://localhost:3000/mcp` | URL agents use to connect back |
-| `COUNCIL_PASSWORD` | — | Web UI password (auth disabled if unset) |
 | `GITHUB_WEBHOOK_SECRET` | — | GitHub webhook HMAC secret |
 
 ## Tech Stack
@@ -265,7 +297,7 @@ Agents connect to `/mcp` via Streamable HTTP and use these tools:
 | **Database** | SQLite (better-sqlite3 + Drizzle ORM) |
 | **Agent Protocol** | MCP (Model Context Protocol) via @modelcontextprotocol/sdk |
 | **Agent Spawning** | Claude Agent SDK or webhook-based |
-| **Testing** | Vitest — 171 tests |
+| **Testing** | Vitest — 231 tests |
 
 ## Contributing
 

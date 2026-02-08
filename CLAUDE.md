@@ -60,7 +60,7 @@ Tool registration uses: `server.registerTool(name, {inputSchema: {key: z.schema(
 
 ### Schema
 
-Tables defined in `src/server/db.ts` using Drizzle ORM: `councils`, `sessions`, `messages`, `votes`, `decisions`, `events`, `escalation_events`.
+Tables defined in `src/server/db.ts` using Drizzle ORM: `councils`, `sessions`, `messages`, `votes`, `decisions`, `events`, `escalation_events`, `users`, `user_sessions`, `agent_tokens`.
 
 ### Adding New Columns
 
@@ -95,6 +95,7 @@ const council = createApp({
 // council.httpServer   — HTTP server (call .listen() yourself)
 // council.orchestrator — Orchestrator instance
 // council.store        — DbStore instance
+// council.userStore    — UserStore instance
 // council.councilId    — Resolved council ID
 // council.close()      — Shuts down HTTP server + SQLite
 ```
@@ -110,13 +111,32 @@ const council = createApp({
 - Vitest config in `vitest.config.ts`
 - Use in-memory or temp-dir SQLite databases for DB tests
 - Integration tests use `createApp()` with ephemeral ports (`listen(0)`) and temp directories
-- 171 tests: unit (engine, shared), server (auth, webhooks, migrations), and e2e integration
+- 231 tests: unit (engine, shared), server (auth, webhooks, migrations, user-store), and e2e integration
 
 ## Configuration
 
 Council YAML config is validated by Zod schemas in `src/shared/schemas.ts`. Types in `src/shared/types.ts`.
 
 Key config sections: `agents`, `rules` (including `voting_scheme`, `escalation`, refinement settings), `event_routing`, `communication_graph`, `spawner`.
+
+### Persistent Agents
+
+Agents can be configured with `persistent: true` in YAML. Persistent agents:
+- Receive a stable token (`council_persistent_<agentId>_<random>`) stored in `agent_tokens` table
+- Stay connected across multiple sessions — the orchestrator notifies them of new assignments via MCP logging messages instead of re-spawning
+- Track active sessions in `AgentRegistry.activeSessions`
+- Can poll for assignments using the `council_get_assignments` MCP tool
+
+The `createMcpRouter()` return type is `{ router, notifyAgent }` — the `notifyAgent` callback is wired into the orchestrator via `orchestrator.setNotifyPersistentAgent()`.
+
+### Authentication
+
+Multi-user auth with session cookies and optional TOTP 2FA. Key files:
+- `src/server/auth.ts` — cookie-based session auth, `/auth/*` routes, `protect` / `requireAdmin` middleware
+- `src/server/user-store.ts` — `UserStore` class for user CRUD, password hashing (bcrypt), TOTP secret management
+- `src/server/admin-api.ts` — admin-only user management routes (`/api/admin/users`)
+
+First user created via `POST /auth/setup` becomes admin. Subsequent users are created by admins. The MCP endpoint (`/mcp`) is exempt from auth — agents authenticate via their own token header (`x-agent-token`).
 
 ## CI / Docker
 
