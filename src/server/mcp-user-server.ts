@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { Router, Request, Response } from 'express';
 import { Router as createRouter } from 'express';
 import type { Orchestrator } from '../engine/orchestrator.js';
+import type { OrchestratorRegistry } from '../engine/orchestrator-registry.js';
 import type { UserStore, UserRow } from './user-store.js';
 import type { PublicUser } from '../shared/types.js';
 
@@ -25,7 +26,7 @@ function toPublicUser(row: UserRow): PublicUser {
  */
 function registerUserTools(
   server: McpServer,
-  orchestrator: Orchestrator,
+  registry: OrchestratorRegistry,
   sessionUsers: Map<string, PublicUser>,
 ): void {
   // Helper to get user from session
@@ -33,6 +34,43 @@ function registerUserTools(
     if (!extra.sessionId) return null;
     return sessionUsers.get(extra.sessionId) ?? null;
   }
+
+  // Helper to resolve orchestrator from optional council_id, falling back to default
+  function resolveOrchestrator(councilId?: string): { orchestrator: Orchestrator; councilId: string } | null {
+    if (councilId) {
+      const entry = registry.get(councilId);
+      if (!entry) return null;
+      return { orchestrator: entry.orchestrator, councilId };
+    }
+    const defaultEntry = registry.getDefault();
+    const defaultId = registry.getDefaultId();
+    if (!defaultEntry || !defaultId) return null;
+    return { orchestrator: defaultEntry.orchestrator, councilId: defaultId };
+  }
+
+  // ── Tool: council_user_list_councils ──
+  server.registerTool(
+    'council_user_list_councils',
+    {
+      description: 'List all available councils',
+      inputSchema: {},
+    },
+    async (_args, extra) => {
+      const user = getUser(extra);
+      if (!user) {
+        return { content: [{ type: 'text', text: 'Error: Not authenticated' }], isError: true };
+      }
+      const allCouncils = registry.list().map(({ councilId, entry }) => ({
+        id: councilId,
+        name: entry.config.council.name,
+        description: entry.config.council.description,
+        agentCount: entry.config.council.agents.length,
+      }));
+      return {
+        content: [{ type: 'text', text: JSON.stringify(allCouncils, null, 2) }],
+      };
+    },
+  );
 
   // ── Tool: council_user_list_sessions ──
   server.registerTool(
@@ -44,14 +82,19 @@ function registerUserTools(
           'investigation', 'proposal', 'discussion', 'refinement',
           'voting', 'review', 'decided', 'closed',
         ]).optional().describe('Filter by session phase'),
+        council_id: z.string().optional().describe('Council ID (uses default if omitted)'),
       },
     },
-    async ({ phase }, extra) => {
+    async ({ phase, council_id }, extra) => {
       const user = getUser(extra);
       if (!user) {
         return { content: [{ type: 'text', text: 'Error: Not authenticated' }], isError: true };
       }
-      const sessions = orchestrator.listSessions(phase);
+      const resolved = resolveOrchestrator(council_id);
+      if (!resolved) {
+        return { content: [{ type: 'text', text: 'Error: Council not found' }], isError: true };
+      }
+      const sessions = resolved.orchestrator.listSessions(phase);
       return {
         content: [{ type: 'text', text: JSON.stringify(sessions, null, 2) }],
       };
@@ -65,20 +108,25 @@ function registerUserTools(
       description: 'Get full session details including messages, votes, and decision',
       inputSchema: {
         session_id: z.string().describe('The session ID to retrieve'),
+        council_id: z.string().optional().describe('Council ID (uses default if omitted)'),
       },
     },
-    async ({ session_id }, extra) => {
+    async ({ session_id, council_id }, extra) => {
       const user = getUser(extra);
       if (!user) {
         return { content: [{ type: 'text', text: 'Error: Not authenticated' }], isError: true };
       }
-      const session = orchestrator.getSession(session_id);
+      const resolved = resolveOrchestrator(council_id);
+      if (!resolved) {
+        return { content: [{ type: 'text', text: 'Error: Council not found' }], isError: true };
+      }
+      const session = resolved.orchestrator.getSession(session_id);
       if (!session) {
         return { content: [{ type: 'text', text: 'Error: Session not found' }], isError: true };
       }
-      const messages = orchestrator.getMessages(session_id);
-      const votes = orchestrator.getVotes(session_id);
-      const decision = orchestrator.getDecision(session_id);
+      const messages = resolved.orchestrator.getMessages(session_id);
+      const votes = resolved.orchestrator.getVotes(session_id);
+      const decision = resolved.orchestrator.getDecision(session_id);
       return {
         content: [{
           type: 'text',
@@ -97,15 +145,20 @@ function registerUserTools(
         title: z.string().describe('Session title/topic'),
         lead_agent_id: z.string().optional().describe('Lead agent ID (optional)'),
         topics: z.array(z.string()).optional().describe('Expertise tags for dynamic voting weights (optional)'),
+        council_id: z.string().optional().describe('Council ID (uses default if omitted)'),
       },
     },
-    async ({ title, lead_agent_id, topics }, extra) => {
+    async ({ title, lead_agent_id, topics, council_id }, extra) => {
       const user = getUser(extra);
       if (!user) {
         return { content: [{ type: 'text', text: 'Error: Not authenticated' }], isError: true };
       }
+      const resolved = resolveOrchestrator(council_id);
+      if (!resolved) {
+        return { content: [{ type: 'text', text: 'Error: Council not found' }], isError: true };
+      }
       try {
-        const session = orchestrator.createSession({
+        const session = resolved.orchestrator.createSession({
           title,
           leadAgentId: lead_agent_id ?? null,
           topics,
@@ -131,15 +184,20 @@ function registerUserTools(
         session_id: z.string().describe('The session ID'),
         action: z.enum(['approve', 'reject', 'send_back']).describe('Review action'),
         notes: z.string().optional().describe('Review notes'),
+        council_id: z.string().optional().describe('Council ID (uses default if omitted)'),
       },
     },
-    async ({ session_id, action, notes }, extra) => {
+    async ({ session_id, action, notes, council_id }, extra) => {
       const user = getUser(extra);
       if (!user) {
         return { content: [{ type: 'text', text: 'Error: Not authenticated' }], isError: true };
       }
+      const resolved = resolveOrchestrator(council_id);
+      if (!resolved) {
+        return { content: [{ type: 'text', text: 'Error: Council not found' }], isError: true };
+      }
       try {
-        orchestrator.submitReview(session_id, action, user.displayName, notes);
+        resolved.orchestrator.submitReview(session_id, action, user.displayName, notes);
         return {
           content: [{
             type: 'text',
@@ -157,14 +215,20 @@ function registerUserTools(
     'council_user_list_pending_decisions',
     {
       description: 'List decisions awaiting human review',
-      inputSchema: {},
+      inputSchema: {
+        council_id: z.string().optional().describe('Council ID (uses default if omitted)'),
+      },
     },
-    async (_args, extra) => {
+    async ({ council_id }, extra) => {
       const user = getUser(extra);
       if (!user) {
         return { content: [{ type: 'text', text: 'Error: Not authenticated' }], isError: true };
       }
-      const decisions = orchestrator.listPendingDecisions();
+      const resolved = resolveOrchestrator(council_id);
+      if (!resolved) {
+        return { content: [{ type: 'text', text: 'Error: Council not found' }], isError: true };
+      }
+      const decisions = resolved.orchestrator.listPendingDecisions();
       return {
         content: [{ type: 'text', text: JSON.stringify(decisions, null, 2) }],
       };
@@ -176,15 +240,20 @@ function registerUserTools(
     'council_user_get_agents',
     {
       description: 'Get agent statuses',
-      inputSchema: {},
+      inputSchema: {
+        council_id: z.string().optional().describe('Council ID (uses default if omitted)'),
+      },
     },
-    async (_args, extra) => {
+    async ({ council_id }, extra) => {
       const user = getUser(extra);
       if (!user) {
         return { content: [{ type: 'text', text: 'Error: Not authenticated' }], isError: true };
       }
-      const registry = orchestrator.getAgentRegistry();
-      const agents = registry.getStatuses();
+      const resolved = resolveOrchestrator(council_id);
+      if (!resolved) {
+        return { content: [{ type: 'text', text: 'Error: Council not found' }], isError: true };
+      }
+      const agents = resolved.orchestrator.getAgentRegistry().getStatuses();
       return {
         content: [{ type: 'text', text: JSON.stringify(agents, null, 2) }],
       };
@@ -202,15 +271,20 @@ function registerUserTools(
           'investigation', 'proposal', 'discussion', 'refinement',
           'voting', 'review', 'decided', 'closed',
         ]).describe('Target phase'),
+        council_id: z.string().optional().describe('Council ID (uses default if omitted)'),
       },
     },
-    async ({ session_id, phase }, extra) => {
+    async ({ session_id, phase, council_id }, extra) => {
       const user = getUser(extra);
       if (!user) {
         return { content: [{ type: 'text', text: 'Error: Not authenticated' }], isError: true };
       }
+      const resolved = resolveOrchestrator(council_id);
+      if (!resolved) {
+        return { content: [{ type: 'text', text: 'Error: Council not found' }], isError: true };
+      }
       try {
-        orchestrator.transitionPhase(session_id, phase);
+        resolved.orchestrator.transitionPhase(session_id, phase);
         return {
           content: [{
             type: 'text',
@@ -231,15 +305,20 @@ function registerUserTools(
       inputSchema: {
         event_type: z.string().describe('Event type (e.g. "test.event")'),
         payload: z.record(z.unknown()).describe('Event payload'),
+        council_id: z.string().optional().describe('Council ID (uses default if omitted)'),
       },
     },
-    async ({ event_type, payload }, extra) => {
+    async ({ event_type, payload, council_id }, extra) => {
       const user = getUser(extra);
       if (!user) {
         return { content: [{ type: 'text', text: 'Error: Not authenticated' }], isError: true };
       }
+      const resolved = resolveOrchestrator(council_id);
+      if (!resolved) {
+        return { content: [{ type: 'text', text: 'Error: Council not found' }], isError: true };
+      }
       try {
-        const session = await orchestrator.handleWebhookEvent({
+        const session = await resolved.orchestrator.handleWebhookEvent({
           source: 'generic',
           eventType: event_type,
           payload,
@@ -267,14 +346,45 @@ function registerUserTools(
  */
 function registerResources(
   server: McpServer,
-  orchestrator: Orchestrator,
+  registry: OrchestratorRegistry,
 ): void {
+  // Helper: get default orchestrator for backward-compatible resources
+  function getDefaultOrchestrator(): Orchestrator | null {
+    return registry.getDefault()?.orchestrator ?? null;
+  }
+
+  // ── council://councils ──
+  server.registerResource(
+    'council_councils',
+    'council://councils',
+    { description: 'All available councils', mimeType: 'application/json' },
+    async () => {
+      const allCouncils = registry.list().map(({ councilId, entry }) => ({
+        id: councilId,
+        name: entry.config.council.name,
+        description: entry.config.council.description,
+        agentCount: entry.config.council.agents.length,
+      }));
+      return {
+        contents: [{
+          uri: 'council://councils',
+          mimeType: 'application/json',
+          text: JSON.stringify(allCouncils, null, 2),
+        }],
+      };
+    },
+  );
+
   // ── council://config ──
   server.registerResource(
     'council_config',
     'council://config',
-    { description: 'Council configuration', mimeType: 'application/json' },
+    { description: 'Default council configuration', mimeType: 'application/json' },
     async () => {
+      const orchestrator = getDefaultOrchestrator();
+      if (!orchestrator) {
+        return { contents: [{ uri: 'council://config', mimeType: 'application/json', text: '{"error":"No council available"}' }] };
+      }
       const config = orchestrator.getConfig();
       return {
         contents: [{
@@ -298,6 +408,10 @@ function registerResources(
     'council://agents',
     { description: 'Current agent statuses', mimeType: 'application/json' },
     async () => {
+      const orchestrator = getDefaultOrchestrator();
+      if (!orchestrator) {
+        return { contents: [{ uri: 'council://agents', mimeType: 'application/json', text: '[]' }] };
+      }
       const agents = orchestrator.getAgentRegistry().getStatuses();
       return {
         contents: [{
@@ -315,6 +429,10 @@ function registerResources(
     'council://decisions/pending',
     { description: 'Decisions awaiting human review', mimeType: 'application/json' },
     async () => {
+      const orchestrator = getDefaultOrchestrator();
+      if (!orchestrator) {
+        return { contents: [{ uri: 'council://decisions/pending', mimeType: 'application/json', text: '[]' }] };
+      }
       const decisions = orchestrator.listPendingDecisions();
       return {
         contents: [{
@@ -332,6 +450,10 @@ function registerResources(
     'council://sessions',
     { description: 'All deliberation sessions', mimeType: 'application/json' },
     async () => {
+      const orchestrator = getDefaultOrchestrator();
+      if (!orchestrator) {
+        return { contents: [{ uri: 'council://sessions', mimeType: 'application/json', text: '[]' }] };
+      }
       const sessions = orchestrator.listSessions();
       return {
         contents: [{
@@ -348,6 +470,8 @@ function registerResources(
     'council_session_detail',
     new ResourceTemplate('council://sessions/{sessionId}', {
       list: async () => {
+        const orchestrator = getDefaultOrchestrator();
+        if (!orchestrator) return { resources: [] };
         const sessions = orchestrator.listSessions();
         return {
           resources: sessions.map((s) => ({
@@ -361,6 +485,10 @@ function registerResources(
     }),
     { description: 'Session detail with messages, votes, and decision', mimeType: 'application/json' },
     async (uri, { sessionId }) => {
+      const orchestrator = getDefaultOrchestrator();
+      if (!orchestrator) {
+        return { contents: [{ uri: uri.href, mimeType: 'application/json', text: '{"error":"No council available"}' }] };
+      }
       const sid = String(sessionId);
       const session = orchestrator.getSession(sid);
       if (!session) {
@@ -402,10 +530,11 @@ function registerPrompts(server: McpServer): void {
             `I want to start a deliberation on: "${topic}"`,
             '',
             'Please help me:',
-            '1. Use council_user_get_agents to see available agents',
-            '2. Use council_user_create_session to create a session with an appropriate title',
-            '3. Optionally assign a lead agent based on the topic',
-            '4. Summarize the created session details',
+            '1. Use council_user_list_councils to see available councils',
+            '2. Use council_user_get_agents to see available agents',
+            '3. Use council_user_create_session to create a session with an appropriate title',
+            '4. Optionally assign a lead agent based on the topic',
+            '5. Summarize the created session details',
           ].join('\n'),
         },
       }],
@@ -461,7 +590,7 @@ function registerPrompts(server: McpServer): void {
  * Create a fresh McpServer for a user session.
  */
 function createUserServerInstance(
-  orchestrator: Orchestrator,
+  registry: OrchestratorRegistry,
   sessionUsers: Map<string, PublicUser>,
 ): McpServer {
   const server = new McpServer({
@@ -470,8 +599,8 @@ function createUserServerInstance(
   }, {
     instructions: 'Council user MCP server. Manage deliberation sessions, review decisions, and monitor agents.',
   });
-  registerUserTools(server, orchestrator, sessionUsers);
-  registerResources(server, orchestrator);
+  registerUserTools(server, registry, sessionUsers);
+  registerResources(server, registry);
   registerPrompts(server);
   return server;
 }
@@ -485,7 +614,7 @@ export interface UserMcpRouterResult {
  * Authenticates via Bearer token (API key) tied to user accounts.
  */
 export function createUserMcpRouter(
-  orchestrator: Orchestrator,
+  registry: OrchestratorRegistry,
   userStore: UserStore,
 ): UserMcpRouterResult {
   const router = createRouter();
@@ -525,12 +654,16 @@ export function createUserMcpRouter(
       }
       const publicUser = toPublicUser(user);
 
-      const server = createUserServerInstance(orchestrator, sessionUsers);
+      const server = createUserServerInstance(registry, sessionUsers);
 
-      // Wire up real-time resource updates
-      const unsubscribe = orchestrator.onEvent(() => {
-        server.server.sendResourceListChanged().catch(() => {});
-      });
+      // Wire up real-time resource updates from all orchestrators
+      const unsubscribers: Array<() => void> = [];
+      for (const { entry } of registry.list()) {
+        unsubscribers.push(entry.orchestrator.onEvent(() => {
+          server.server.sendResourceListChanged().catch(() => {});
+        }));
+      }
+      const unsubscribe = () => unsubscribers.forEach(fn => fn());
 
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),

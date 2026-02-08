@@ -83,26 +83,53 @@ Add `CREATE TABLE IF NOT EXISTS` and any indexes in the `sqlite.exec()` block in
 ```typescript
 import { createApp, type CreateAppOptions, type CouncilApp } from '@/server/index.js';
 
+// Single council (backward compatible):
 const council = createApp({
   dbPath: '/path/to/db',
   config,                    // Parsed CouncilConfig
   councilId: 'optional-id',  // Auto-generated if omitted
   mcpBaseUrl: 'http://...',
-  password: 'optional',
 });
 
-// council.app         — Express app
-// council.httpServer   — HTTP server (call .listen() yourself)
-// council.orchestrator — Orchestrator instance
-// council.store        — DbStore instance
-// council.userStore    — UserStore instance
-// council.councilId    — Resolved council ID
-// council.close()      — Shuts down HTTP server + SQLite
+// Multiple councils:
+const council = createApp({
+  dbPath: '/path/to/db',
+  configs: [
+    { councilId: 'alpha', config: configA },
+    { councilId: 'beta', config: configB },
+  ],
+  mcpBaseUrl: 'http://...',
+});
+
+// council.app          — Express app
+// council.httpServer    — HTTP server (call .listen() yourself)
+// council.orchestrator  — Default orchestrator (first registered)
+// council.registry      — OrchestratorRegistry (all councils)
+// council.store         — DbStore instance (shared)
+// council.userStore     — UserStore instance (shared)
+// council.councilId     — Default council ID
+// council.close()       — Shuts down HTTP server + SQLite
 ```
 
 `createApp()` does NOT call `listen()` — the caller controls the lifecycle. `main()` is guarded by entry-point detection so importing `createApp` from tests won't auto-start the server.
 
 `createDb()` returns `{ db, sqlite }` — the Drizzle client and raw better-sqlite3 instance. `DbClient` type is `ReturnType<typeof drizzle>`.
+
+### Multi-Council Support
+
+`OrchestratorRegistry` (engine layer, `src/engine/orchestrator-registry.ts`) maps councilId → OrchestratorEntry. Each entry contains an independent Orchestrator, AgentRegistry, EventRouter, and config. Key methods:
+
+- `create(councilId, config, store, mcpBaseUrl)` — builds full engine stack, registers it
+- `get(councilId)` / `getDefault()` — look up entries
+- `resolveAgentToken(token)` — cross-council agent token resolution
+- `remove(councilId)` — unregister a council
+- `list()` — all registered councils
+
+All server-layer consumers (API, webhooks, WS, MCP, admin) accept the registry instead of a single orchestrator. Flat API routes use default council or `?councilId=X` query param. Council-scoped routes: `/api/councils/:councilId/sessions`, etc.
+
+`main()` supports `MULTI_CONFIG_DIR` env var — loads all `*.yaml` files from a directory as separate councils.
+
+WsEvent types include optional `councilId?: string` — stamped by the WebSocket bridge for client-side filtering.
 
 ## Testing
 

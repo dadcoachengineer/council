@@ -5,15 +5,29 @@ import { z } from 'zod';
 import type { Router, Request, Response } from 'express';
 import { Router as createRouter } from 'express';
 import type { Orchestrator } from '../engine/orchestrator.js';
+import type { OrchestratorRegistry, OrchestratorEntry } from '../engine/orchestrator-registry.js';
+import type { AgentRegistry } from '../engine/agent-registry.js';
 import { createVotingScheme } from '../engine/voting-schemes/index.js';
 import type { SessionAssignment } from '../shared/types.js';
 
 /**
  * Register all agent-facing tools on an McpServer instance.
- * Called once per MCP session so each client gets its own server.
+ * The orchestrator/registry are resolved per-tool-call based on agent token.
  */
-function registerTools(server: McpServer, orchestrator: Orchestrator): void {
-  const registry = orchestrator.getAgentRegistry();
+function registerTools(server: McpServer, registry: OrchestratorRegistry): void {
+
+  /** Helper: resolve agent token to agentId + orchestrator + agentRegistry. */
+  function resolveToken(token: string): { agentId: string; orchestrator: Orchestrator; agentRegistry: AgentRegistry; councilId: string } | null {
+    const result = registry.resolveAgentToken(token);
+    if (!result) return null;
+    result.entry.agentRegistry.touch(result.agentId);
+    return {
+      agentId: result.agentId,
+      orchestrator: result.entry.orchestrator,
+      agentRegistry: result.entry.agentRegistry,
+      councilId: result.councilId,
+    };
+  }
 
   // ── Tool: council_get_context ──
   server.registerTool(
@@ -25,11 +39,11 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
       },
     },
     async ({ agent_token }) => {
-      const agentId = registry.resolveToken(agent_token);
-      if (!agentId) {
+      const resolved = resolveToken(agent_token);
+      if (!resolved) {
         return { content: [{ type: 'text', text: 'Error: Invalid agent token' }], isError: true };
       }
-      registry.touch(agentId);
+      const { agentId, orchestrator } = resolved;
 
       const sessions = orchestrator.listSessions();
       const relevantSessions = sessions.filter(
@@ -75,11 +89,11 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
       },
     },
     async ({ agent_token, session_id }) => {
-      const agentId = registry.resolveToken(agent_token);
-      if (!agentId) {
+      const resolved = resolveToken(agent_token);
+      if (!resolved) {
         return { content: [{ type: 'text', text: 'Error: Invalid agent token' }], isError: true };
       }
-      registry.touch(agentId);
+      const { orchestrator } = resolved;
 
       const session = orchestrator.getSession(session_id);
       if (!session) {
@@ -112,13 +126,12 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
       },
     },
     async ({ agent_token, session_id, content, to_agent_id }) => {
-      const agentId = registry.resolveToken(agent_token);
-      if (!agentId) {
+      const resolved = resolveToken(agent_token);
+      if (!resolved) {
         return { content: [{ type: 'text', text: 'Error: Invalid agent token' }], isError: true };
       }
-      registry.touch(agentId);
 
-      const message = orchestrator.sendMessage(session_id, agentId, to_agent_id ?? null, content);
+      const message = resolved.orchestrator.sendMessage(session_id, resolved.agentId, to_agent_id ?? null, content);
       return {
         content: [{ type: 'text', text: JSON.stringify({ messageId: message.id, status: 'sent' }) }],
       };
@@ -138,13 +151,12 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
       },
     },
     async ({ agent_token, session_id, target_agent_id, question }) => {
-      const agentId = registry.resolveToken(agent_token);
-      if (!agentId) {
+      const resolved = resolveToken(agent_token);
+      if (!resolved) {
         return { content: [{ type: 'text', text: 'Error: Invalid agent token' }], isError: true };
       }
-      registry.touch(agentId);
 
-      const message = await orchestrator.consultAgent(session_id, agentId, target_agent_id, question);
+      const message = await resolved.orchestrator.consultAgent(session_id, resolved.agentId, target_agent_id, question);
       return {
         content: [{ type: 'text', text: JSON.stringify({ messageId: message.id, status: 'consultation_sent' }) }],
       };
@@ -163,14 +175,13 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
       },
     },
     async ({ agent_token, session_id, proposal }) => {
-      const agentId = registry.resolveToken(agent_token);
-      if (!agentId) {
+      const resolved = resolveToken(agent_token);
+      if (!resolved) {
         return { content: [{ type: 'text', text: 'Error: Invalid agent token' }], isError: true };
       }
-      registry.touch(agentId);
 
       try {
-        const message = orchestrator.createProposal(session_id, agentId, proposal);
+        const message = resolved.orchestrator.createProposal(session_id, resolved.agentId, proposal);
         return {
           content: [{ type: 'text', text: JSON.stringify({ messageId: message.id, status: 'proposal_created' }) }],
         };
@@ -192,13 +203,12 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
       },
     },
     async ({ agent_token, session_id, findings }) => {
-      const agentId = registry.resolveToken(agent_token);
-      if (!agentId) {
+      const resolved = resolveToken(agent_token);
+      if (!resolved) {
         return { content: [{ type: 'text', text: 'Error: Invalid agent token' }], isError: true };
       }
-      registry.touch(agentId);
 
-      const message = orchestrator.submitFindings(session_id, agentId, findings);
+      const message = resolved.orchestrator.submitFindings(session_id, resolved.agentId, findings);
       return {
         content: [{ type: 'text', text: JSON.stringify({ messageId: message.id, status: 'findings_submitted' }) }],
       };
@@ -218,14 +228,13 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
       },
     },
     async ({ agent_token, session_id, vote, reasoning }) => {
-      const agentId = registry.resolveToken(agent_token);
-      if (!agentId) {
+      const resolved = resolveToken(agent_token);
+      if (!resolved) {
         return { content: [{ type: 'text', text: 'Error: Invalid agent token' }], isError: true };
       }
-      registry.touch(agentId);
 
       try {
-        const voteResult = orchestrator.castVote(session_id, agentId, vote, reasoning);
+        const voteResult = resolved.orchestrator.castVote(session_id, resolved.agentId, vote, reasoning);
         return {
           content: [{ type: 'text', text: JSON.stringify({ voteId: voteResult.id, status: 'vote_cast' }) }],
         };
@@ -248,13 +257,12 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
       },
     },
     async ({ agent_token, phase }) => {
-      const agentId = registry.resolveToken(agent_token);
-      if (!agentId) {
+      const resolved = resolveToken(agent_token);
+      if (!resolved) {
         return { content: [{ type: 'text', text: 'Error: Invalid agent token' }], isError: true };
       }
-      registry.touch(agentId);
 
-      const sessions = orchestrator.listSessions(phase);
+      const sessions = resolved.orchestrator.listSessions(phase);
       return {
         content: [{ type: 'text', text: JSON.stringify(sessions, null, 2) }],
       };
@@ -271,23 +279,20 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
       },
     },
     async ({ agent_token }) => {
-      const agentId = registry.resolveToken(agent_token);
-      if (!agentId) {
+      const resolved = resolveToken(agent_token);
+      if (!resolved) {
         return { content: [{ type: 'text', text: 'Error: Invalid agent token' }], isError: true };
       }
-      registry.touch(agentId);
 
-      const config = orchestrator.getConfig();
+      const allCouncils = registry.list().map(({ councilId, entry }) => ({
+        id: councilId,
+        name: entry.config.council.name,
+        description: entry.config.council.description,
+        agents: entry.config.council.agents.map((a) => ({ id: a.id, name: a.name, role: a.role })),
+      }));
+
       return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            id: orchestrator.getCouncilId(),
-            name: config.council.name,
-            description: config.council.description,
-            agents: config.council.agents.map((a) => ({ id: a.id, name: a.name, role: a.role })),
-          }, null, 2),
-        }],
+        content: [{ type: 'text', text: JSON.stringify(allCouncils, null, 2) }],
       };
     },
   );
@@ -305,14 +310,13 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
       },
     },
     async ({ agent_token, session_id, amendment, parent_message_id }) => {
-      const agentId = registry.resolveToken(agent_token);
-      if (!agentId) {
+      const resolved = resolveToken(agent_token);
+      if (!resolved) {
         return { content: [{ type: 'text', text: 'Error: Invalid agent token' }], isError: true };
       }
-      registry.touch(agentId);
 
       try {
-        const message = orchestrator.proposeAmendment(session_id, agentId, amendment, parent_message_id);
+        const message = resolved.orchestrator.proposeAmendment(session_id, resolved.agentId, amendment, parent_message_id);
         return {
           content: [{
             type: 'text',
@@ -343,14 +347,13 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
       },
     },
     async ({ agent_token, session_id, amendment_id, action }) => {
-      const agentId = registry.resolveToken(agent_token);
-      if (!agentId) {
+      const resolved = resolveToken(agent_token);
+      if (!resolved) {
         return { content: [{ type: 'text', text: 'Error: Invalid agent token' }], isError: true };
       }
-      registry.touch(agentId);
 
       try {
-        orchestrator.resolveAmendment(session_id, agentId, amendment_id, action);
+        resolved.orchestrator.resolveAmendment(session_id, resolved.agentId, amendment_id, action);
         return {
           content: [{
             type: 'text',
@@ -373,13 +376,12 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
       },
     },
     async ({ agent_token }) => {
-      const agentId = registry.resolveToken(agent_token);
-      if (!agentId) {
+      const resolved = resolveToken(agent_token);
+      if (!resolved) {
         return { content: [{ type: 'text', text: 'Error: Invalid agent token' }], isError: true };
       }
-      registry.touch(agentId);
 
-      const config = orchestrator.getConfig();
+      const config = resolved.orchestrator.getConfig();
       const scheme = createVotingScheme(config.council.rules.voting_scheme);
 
       return {
@@ -406,13 +408,13 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
       },
     },
     async ({ agent_token }) => {
-      const agentId = registry.resolveToken(agent_token);
-      if (!agentId) {
+      const resolved = resolveToken(agent_token);
+      if (!resolved) {
         return { content: [{ type: 'text', text: 'Error: Invalid agent token' }], isError: true };
       }
-      registry.touch(agentId);
+      const { agentId, agentRegistry, orchestrator } = resolved;
 
-      const sessionIds = registry.getActiveSessions(agentId);
+      const sessionIds = agentRegistry.getActiveSessions(agentId);
       const assignments = sessionIds.map((sid) => {
         const session = orchestrator.getSession(sid);
         if (!session) return null;
@@ -437,14 +439,14 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
  * Each MCP session gets its own server instance because
  * McpServer only supports a single transport connection.
  */
-function createServerInstance(orchestrator: Orchestrator): McpServer {
+function createServerInstance(registry: OrchestratorRegistry): McpServer {
   const server = new McpServer({
     name: 'council',
     version: '0.1.0',
   }, {
     instructions: 'Council MCP server. Connect with your agent token to participate in deliberations.',
   });
-  registerTools(server, orchestrator);
+  registerTools(server, registry);
   return server;
 }
 
@@ -458,11 +460,10 @@ export interface McpRouterResult {
  * Supports multiple concurrent agent connections, each with
  * its own McpServer + StreamableHTTPServerTransport pair.
  */
-export function createMcpRouter(orchestrator: Orchestrator): McpRouterResult {
+export function createMcpRouter(registry: OrchestratorRegistry): McpRouterResult {
   const router = createRouter();
   const transports = new Map<string, StreamableHTTPServerTransport>();
   const servers = new Map<string, McpServer>();
-  const registry = orchestrator.getAgentRegistry();
 
   // Persistent agent connections keyed by agentId
   const persistentConnections = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport; mcpSessionId: string }>();
@@ -476,7 +477,7 @@ export function createMcpRouter(orchestrator: Orchestrator): McpRouterResult {
     if (sessionId && transports.has(sessionId)) {
       transport = transports.get(sessionId)!;
     } else if (!sessionId) {
-      const server = createServerInstance(orchestrator);
+      const server = createServerInstance(registry);
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {
@@ -485,12 +486,12 @@ export function createMcpRouter(orchestrator: Orchestrator): McpRouterResult {
           // Try to identify the agent from the init request
           const token = req.headers['x-agent-token'] as string | undefined;
           if (token) {
-            const agentId = registry.resolveToken(token);
-            if (agentId) {
-              registry.connect(agentId);
+            const result = registry.resolveAgentToken(token);
+            if (result) {
+              result.entry.agentRegistry.connect(result.agentId);
               // Track persistent agent connections
-              if (registry.isPersistent(agentId)) {
-                persistentConnections.set(agentId, { server, transport, mcpSessionId: id });
+              if (result.entry.agentRegistry.isPersistent(result.agentId)) {
+                persistentConnections.set(result.agentId, { server, transport, mcpSessionId: id });
               }
             }
           }
@@ -512,22 +513,22 @@ export function createMcpRouter(orchestrator: Orchestrator): McpRouterResult {
       // Check if this is a persistent agent reconnecting with a stale session
       const token = req.headers['x-agent-token'] as string | undefined;
       if (token) {
-        const agentId = registry.resolveToken(token);
-        if (agentId && registry.isPersistent(agentId)) {
+        const result = registry.resolveAgentToken(token);
+        if (result && result.entry.agentRegistry.isPersistent(result.agentId)) {
           // Replace stale transport with new connection
-          const server = createServerInstance(orchestrator);
+          const server = createServerInstance(registry);
           transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
             onsessioninitialized: (id) => {
               transports.set(id, transport);
               servers.set(id, server);
-              registry.connect(agentId);
-              persistentConnections.set(agentId, { server, transport, mcpSessionId: id });
+              result.entry.agentRegistry.connect(result.agentId);
+              persistentConnections.set(result.agentId, { server, transport, mcpSessionId: id });
             },
             onsessionclosed: (id) => {
               transports.delete(id);
               servers.delete(id);
-              persistentConnections.delete(agentId);
+              persistentConnections.delete(result.agentId);
             },
           });
           await server.connect(transport);

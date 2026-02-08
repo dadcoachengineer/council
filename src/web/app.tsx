@@ -10,11 +10,22 @@ import { SetupPage } from './components/SetupPage.js';
 import { TwoFactorPage } from './components/TwoFactorPage.js';
 import { UserManagement } from './components/UserManagement.js';
 import { AccountSettings } from './components/AccountSettings.js';
+import { CouncilSelector } from './components/CouncilSelector.js';
+import { CouncilManagement } from './components/CouncilManagement.js';
 import type { Session, Decision, IncomingEvent, AgentStatus as AgentStatusType, PublicUser } from '../shared/types.js';
 import type { WsEvent } from '../shared/events.js';
 
-type View = 'sessions' | 'session' | 'decisions' | 'events' | 'agents' | 'users' | 'account';
+type View = 'sessions' | 'session' | 'decisions' | 'events' | 'agents' | 'users' | 'account' | 'councils';
 type AuthState = 'checking' | 'setup' | 'login' | '2fa' | 'authenticated';
+
+interface CouncilSummary {
+  id: string;
+  name: string;
+  description: string;
+  agentCount: number;
+  active: boolean;
+  createdAt: string;
+}
 
 function App() {
   const [authState, setAuthState] = useState<AuthState>('checking');
@@ -29,6 +40,10 @@ function App() {
   const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
+
+  // ── Council state ──
+  const [councils, setCouncils] = useState<CouncilSummary[]>([]);
+  const [selectedCouncilId, setSelectedCouncilId] = useState<string | null>(null);
 
   // ── Auth check ──
   useEffect(() => {
@@ -56,34 +71,53 @@ function App() {
     setAuthState('login');
   };
 
+  // Build query string for council-scoped fetches
+  const councilQuery = selectedCouncilId ? `?councilId=${selectedCouncilId}` : '';
+
+  // Fetch councils
+  const fetchCouncils = useCallback(async () => {
+    const res = await fetch('/api/councils');
+    if (res.ok) setCouncils(await res.json());
+  }, []);
+
   // Fetch initial data
   const fetchSessions = useCallback(async () => {
-    const res = await fetch('/api/sessions');
+    const res = await fetch(`/api/sessions${councilQuery}`);
     if (res.ok) setSessions(await res.json());
-  }, []);
+  }, [councilQuery]);
 
   const fetchDecisions = useCallback(async () => {
-    const res = await fetch('/api/decisions');
+    const res = await fetch(`/api/decisions${councilQuery}`);
     if (res.ok) setDecisions(await res.json());
-  }, []);
+  }, [councilQuery]);
 
   const fetchEvents = useCallback(async () => {
-    const res = await fetch('/api/events');
+    const res = await fetch(`/api/events${councilQuery}`);
     if (res.ok) setEvents(await res.json());
-  }, []);
+  }, [councilQuery]);
 
   const fetchAgents = useCallback(async () => {
-    const res = await fetch('/api/agents');
+    const res = await fetch(`/api/agents${councilQuery}`);
     if (res.ok) setAgents(await res.json());
-  }, []);
+  }, [councilQuery]);
 
+  useEffect(() => {
+    if (authState !== 'authenticated') return;
+    fetchCouncils();
+    fetchSessions();
+    fetchDecisions();
+    fetchEvents();
+    fetchAgents();
+  }, [authState, fetchCouncils, fetchSessions, fetchDecisions, fetchEvents, fetchAgents]);
+
+  // Re-fetch when council selection changes
   useEffect(() => {
     if (authState !== 'authenticated') return;
     fetchSessions();
     fetchDecisions();
     fetchEvents();
     fetchAgents();
-  }, [authState, fetchSessions, fetchDecisions, fetchEvents, fetchAgents]);
+  }, [selectedCouncilId]);
 
   // WebSocket connection (only when authenticated)
   useEffect(() => {
@@ -105,6 +139,12 @@ function App() {
 
       socket.onmessage = (e) => {
         const event: WsEvent = JSON.parse(e.data);
+
+        // Filter by selected council if one is chosen
+        if (selectedCouncilId && event.councilId && event.councilId !== selectedCouncilId) {
+          return;
+        }
+
         switch (event.type) {
           case 'session:created':
             setSessions((prev) => [event.session, ...prev]);
@@ -152,13 +192,14 @@ function App() {
       clearTimeout(reconnectTimer);
       wsRef.current?.close();
     };
-  }, [authState]);
+  }, [authState, selectedCouncilId]);
 
   const navItems: { key: View; label: string; count?: number; adminOnly?: boolean }[] = [
     { key: 'sessions', label: 'Sessions', count: sessions.length },
     { key: 'decisions', label: 'Decisions', count: decisions.length },
     { key: 'events', label: 'Events', count: events.length },
     { key: 'agents', label: 'Agents', count: agents.length },
+    { key: 'councils', label: 'Councils', count: councils.length },
     { key: 'users', label: 'Users', adminOnly: true },
     { key: 'account', label: 'Account' },
   ];
@@ -194,6 +235,11 @@ function App() {
           <h1 style={{ fontSize: 18, fontWeight: 700, color: 'var(--accent)' }}>Council</h1>
           <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 4 }}>Multi-Agent Orchestrator</p>
         </div>
+        <CouncilSelector
+          councils={councils}
+          selectedCouncilId={selectedCouncilId}
+          onSelect={setSelectedCouncilId}
+        />
         <div style={{ padding: '12px 8px', flex: 1 }}>
           {navItems
             .filter((item) => !item.adminOnly || currentUser?.role === 'admin')
@@ -272,6 +318,13 @@ function App() {
         )}
         {view === 'events' && <EventLog events={events} />}
         {view === 'agents' && <AgentStatus agents={agents} />}
+        {view === 'councils' && (
+          <CouncilManagement
+            councils={councils}
+            onCouncilCreated={fetchCouncils}
+            onCouncilDeleted={fetchCouncils}
+          />
+        )}
         {view === 'users' && currentUser && (
           <UserManagement currentUser={currentUser} />
         )}

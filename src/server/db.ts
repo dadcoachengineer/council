@@ -104,12 +104,14 @@ export const userSessions = sqliteTable('user_sessions', {
 });
 
 export const agentTokens = sqliteTable('agent_tokens', {
-  agentId: text('agent_id').primaryKey(),
+  agentId: text('agent_id').notNull(),
   councilId: text('council_id').notNull(),
   token: text('token').notNull(),
   createdAt: text('created_at').notNull(),
   lastUsedAt: text('last_used_at'),
-});
+}, (table) => ({
+  pk: primaryKey({ columns: [table.agentId, table.councilId] }),
+}));
 
 export const apiKeys = sqliteTable('api_keys', {
   id: text('id').primaryKey(),
@@ -181,6 +183,28 @@ export function runMigrations(sqlite: Database.Database): void {
       existing.add(migration.column);
       console.log(`Migration: added ${migration.table}.${migration.column} (${migration.type})`);
     }
+  }
+
+  // ── agent_tokens composite PK migration ──
+  // Migrate from single PK (agent_id) to composite PK (agent_id, council_id)
+  const info = sqlite.pragma('table_info(agent_tokens)') as Array<{ name: string; pk: number }>;
+  const pkCols = info.filter(c => c.pk > 0);
+  if (pkCols.length === 1 && pkCols[0].name === 'agent_id') {
+    console.log('Migration: upgrading agent_tokens to composite PK (agent_id, council_id)');
+    sqlite.exec(`
+      CREATE TABLE agent_tokens_new (
+        agent_id TEXT NOT NULL,
+        council_id TEXT NOT NULL,
+        token TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        last_used_at TEXT,
+        PRIMARY KEY (agent_id, council_id)
+      );
+      INSERT INTO agent_tokens_new SELECT agent_id, council_id, token, created_at, last_used_at FROM agent_tokens;
+      DROP TABLE agent_tokens;
+      ALTER TABLE agent_tokens_new RENAME TO agent_tokens;
+      CREATE INDEX idx_agent_tokens_token ON agent_tokens(token);
+    `);
   }
 }
 
@@ -281,11 +305,12 @@ export function createDb(dbPath: string): { db: DbClient; sqlite: BetterSqlite3.
     );
 
     CREATE TABLE IF NOT EXISTS agent_tokens (
-      agent_id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
       council_id TEXT NOT NULL,
       token TEXT NOT NULL UNIQUE,
       created_at TEXT NOT NULL,
-      last_used_at TEXT
+      last_used_at TEXT,
+      PRIMARY KEY (agent_id, council_id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_agent_tokens_token ON agent_tokens(token);
@@ -370,6 +395,10 @@ export class DbStore implements OrchestratorStore {
       ...row,
       config: JSON.parse(row.config) as CouncilConfig,
     }));
+  }
+
+  deleteCouncil(id: string): void {
+    this.db.delete(councils).where(eq(councils.id, id)).run();
   }
 
   // ── Sessions ──
@@ -519,26 +548,35 @@ export class DbStore implements OrchestratorStore {
       token,
       createdAt: new Date().toISOString(),
     }).onConflictDoUpdate({
-      target: agentTokens.agentId,
-      set: { token, councilId },
+      target: [agentTokens.agentId, agentTokens.councilId],
+      set: { token },
     }).run();
   }
 
-  getPersistentToken(agentId: string): { token: string; lastUsedAt: string | null } | null {
-    const rows = this.db.select().from(agentTokens).where(eq(agentTokens.agentId, agentId)).all();
+  getPersistentToken(agentId: string, councilId?: string): { token: string; lastUsedAt: string | null } | null {
+    const condition = councilId
+      ? and(eq(agentTokens.agentId, agentId), eq(agentTokens.councilId, councilId))
+      : eq(agentTokens.agentId, agentId);
+    const rows = this.db.select().from(agentTokens).where(condition).all();
     if (rows.length === 0) return null;
     return { token: rows[0].token, lastUsedAt: rows[0].lastUsedAt };
   }
 
-  updateTokenLastUsed(agentId: string): void {
+  updateTokenLastUsed(agentId: string, councilId?: string): void {
+    const condition = councilId
+      ? and(eq(agentTokens.agentId, agentId), eq(agentTokens.councilId, councilId))
+      : eq(agentTokens.agentId, agentId);
     this.db.update(agentTokens)
       .set({ lastUsedAt: new Date().toISOString() })
-      .where(eq(agentTokens.agentId, agentId))
+      .where(condition)
       .run();
   }
 
-  deletePersistentToken(agentId: string): void {
-    this.db.delete(agentTokens).where(eq(agentTokens.agentId, agentId)).run();
+  deletePersistentToken(agentId: string, councilId?: string): void {
+    const condition = councilId
+      ? and(eq(agentTokens.agentId, agentId), eq(agentTokens.councilId, councilId))
+      : eq(agentTokens.agentId, agentId);
+    this.db.delete(agentTokens).where(condition).run();
   }
 
   listPersistentTokens(councilId: string): Array<{ agentId: string; token: string }> {

@@ -1,17 +1,14 @@
 import { createServer, type Server as HttpServer } from 'node:http';
 import { resolve } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express, { type Express } from 'express';
 import { nanoid } from 'nanoid';
 
 import { loadConfigFile, parseConfig } from '../engine/config-loader.js';
-import { EventRouter } from '../engine/event-router.js';
-import { MessageBus } from '../engine/message-bus.js';
-import { AgentRegistry } from '../engine/agent-registry.js';
-import { createSpawner } from '../engine/spawner.js';
+import { OrchestratorRegistry } from '../engine/orchestrator-registry.js';
+import type { OrchestratorEntry } from '../engine/orchestrator-registry.js';
 import { Orchestrator } from '../engine/orchestrator.js';
-import { EscalationEngine } from '../engine/escalation-engine.js';
 import { createDb, DbStore } from './db.js';
 import { UserStore } from './user-store.js';
 import { createMcpRouter } from './mcp-server.js';
@@ -27,13 +24,17 @@ const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
 const DB_PATH = process.env.DB_PATH ?? './data/council.db';
 const CONFIG_PATH = process.env.CONFIG_PATH;
+const MULTI_CONFIG_DIR = process.env.MULTI_CONFIG_DIR;
 const MCP_BASE_URL = process.env.MCP_BASE_URL ?? `http://localhost:${PORT}/mcp`;
 
 // ── createApp factory ──
 
 export interface CreateAppOptions {
   dbPath: string;
-  config: CouncilConfig;
+  /** Single config — wrapped into a single-entry registry. */
+  config?: CouncilConfig;
+  /** Multiple configs — each gets its own orchestrator. */
+  configs?: Array<{ councilId?: string; config: CouncilConfig }>;
   councilId?: string;
   mcpBaseUrl?: string;
 }
@@ -41,9 +42,12 @@ export interface CreateAppOptions {
 export interface CouncilApp {
   app: Express;
   httpServer: HttpServer;
+  /** Default orchestrator (first registered). For backward compat. */
   orchestrator: Orchestrator;
+  registry: OrchestratorRegistry;
   store: DbStore;
   userStore: UserStore;
+  /** Default council ID. */
   councilId: string;
   close: () => Promise<void>;
 }
@@ -52,44 +56,38 @@ export function createApp(opts: CreateAppOptions): CouncilApp {
   const { db, sqlite } = createDb(opts.dbPath);
   const store = new DbStore(db);
   const userStore = new UserStore(db);
-  const config = opts.config;
-  const councilId = opts.councilId ?? nanoid();
   const mcpBaseUrl = opts.mcpBaseUrl ?? 'http://localhost:3000/mcp';
 
-  // Persist council
-  if (!store.getCouncil(councilId)) {
-    store.saveCouncil({
-      id: councilId,
-      name: config.council.name,
-      description: config.council.description,
-      config,
-      createdAt: new Date().toISOString(),
-    });
+  const registry = new OrchestratorRegistry();
+
+  // Build the list of configs to register
+  let configEntries: Array<{ councilId: string; config: CouncilConfig }>;
+
+  if (opts.configs && opts.configs.length > 0) {
+    configEntries = opts.configs.map(c => ({
+      councilId: c.councilId ?? nanoid(),
+      config: c.config,
+    }));
+  } else if (opts.config) {
+    configEntries = [{ councilId: opts.councilId ?? nanoid(), config: opts.config }];
+  } else {
+    throw new Error('createApp requires either config or configs option');
   }
 
-  // ── Engine ──
-  const eventRouter = new EventRouter(config.council.event_routing);
-  const messageBus = new MessageBus(config.council.communication_graph);
-  const agentRegistry = new AgentRegistry();
-  agentRegistry.loadAgents(config.council.agents);
-  const spawner = createSpawner(config.council.spawner, agentRegistry);
+  // Create orchestrators for each config
+  for (const { councilId, config } of configEntries) {
+    // Persist council in DB
+    if (!store.getCouncil(councilId)) {
+      store.saveCouncil({
+        id: councilId,
+        name: config.council.name,
+        description: config.council.description,
+        config,
+        createdAt: new Date().toISOString(),
+      });
+    }
 
-  const orchestrator = new Orchestrator({
-    config,
-    councilId,
-    eventRouter,
-    messageBus,
-    agentRegistry,
-    spawner,
-    store,
-    mcpBaseUrl,
-  });
-
-  // ── Escalation Engine ──
-  if (config.council.rules.escalation.length > 0) {
-    const escalationEngine = new EscalationEngine(config, orchestrator);
-    orchestrator.setEscalationEngine(escalationEngine);
-    escalationEngine.start();
+    registry.create(councilId, config, store, mcpBaseUrl);
   }
 
   // ── Express ──
@@ -101,26 +99,28 @@ export function createApp(opts: CreateAppOptions): CouncilApp {
     verify: (req, _res, buf) => {
       (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
     },
-  }), createWebhookRouter(orchestrator, config.council.github));
+  }), createWebhookRouter(registry));
 
   // All other routes use standard JSON parser
   app.use(express.json({ limit: '1mb' }));
 
   // User MCP endpoint (Bearer API key auth)
-  const { router: userMcpRouter } = createUserMcpRouter(orchestrator, userStore);
+  const { router: userMcpRouter } = createUserMcpRouter(registry, userStore);
   app.use('/mcp/user', userMcpRouter);
 
   // Agent MCP endpoint (no auth — agents use their own token-based auth)
-  const { router: mcpRouter, notifyAgent } = createMcpRouter(orchestrator);
+  const { router: mcpRouter, notifyAgent } = createMcpRouter(registry);
   app.use('/mcp', mcpRouter);
 
-  // Wire persistent agent notification callback
-  orchestrator.setNotifyPersistentAgent(notifyAgent);
+  // Wire persistent agent notification callback and load tokens for all councils
+  for (const { councilId, entry } of registry.list()) {
+    entry.orchestrator.setNotifyPersistentAgent(notifyAgent);
 
-  // Load persistent tokens from DB
-  const persistentTokens = store.listPersistentTokens(councilId);
-  for (const { agentId, token } of persistentTokens) {
-    agentRegistry.setPersistentToken(agentId, token);
+    // Load persistent tokens from DB
+    const persistentTokens = store.listPersistentTokens(councilId);
+    for (const { agentId, token } of persistentTokens) {
+      entry.agentRegistry.setPersistentToken(agentId, token);
+    }
   }
 
   // ── Auth ──
@@ -138,14 +138,33 @@ export function createApp(opts: CreateAppOptions): CouncilApp {
   });
 
   // Admin routes (require admin role)
-  app.use('/api/admin', auth.protect, auth.requireAdmin, createAdminRouter(userStore, store, agentRegistry, councilId));
-
-  // REST API (protected)
-  app.use('/api', auth.protect, createApiRouter(orchestrator, store));
+  app.use('/api/admin', auth.protect, auth.requireAdmin, createAdminRouter(userStore, store, registry));
 
   // ── HTTP + WebSocket ──
   const httpServer = createServer(app);
-  setupWebSocket(httpServer, orchestrator);
+  const { addCouncil: wsAddCouncil } = setupWebSocket(httpServer, registry);
+
+  // REST API (protected) — with callbacks for dynamic council management
+  const apiRouter = createApiRouter(registry, store, {
+    onCouncilCreated: (councilId: string, entry: OrchestratorEntry) => {
+      // Wire persistent agent notification
+      entry.orchestrator.setNotifyPersistentAgent(notifyAgent);
+
+      // Load persistent tokens
+      const tokens = store.listPersistentTokens(councilId);
+      for (const { agentId, token } of tokens) {
+        entry.agentRegistry.setPersistentToken(agentId, token);
+      }
+
+      // Subscribe WebSocket to new council
+      wsAddCouncil(councilId, entry.orchestrator);
+    },
+  });
+
+  app.use('/api', auth.protect, apiRouter);
+
+  const defaultId = registry.getDefaultId()!;
+  const defaultEntry = registry.getDefault()!;
 
   const close = (): Promise<void> => {
     return new Promise((resolvePromise, reject) => {
@@ -157,7 +176,16 @@ export function createApp(opts: CreateAppOptions): CouncilApp {
     });
   };
 
-  return { app, httpServer, orchestrator, store, userStore, councilId, close };
+  return {
+    app,
+    httpServer,
+    orchestrator: defaultEntry.orchestrator,
+    registry,
+    store,
+    userStore,
+    councilId: defaultId,
+    close,
+  };
 }
 
 // ── main ──
@@ -173,23 +201,59 @@ async function main() {
   }
 
   // ── Config ──
-  let config: CouncilConfig;
-  let councilId: string | undefined;
+  let configs: Array<{ councilId?: string; config: CouncilConfig }> = [];
 
-  if (CONFIG_PATH) {
-    config = loadConfigFile(CONFIG_PATH);
+  if (MULTI_CONFIG_DIR) {
+    // Load all YAML files from the directory
+    if (!existsSync(MULTI_CONFIG_DIR)) {
+      console.error(`[COUNCIL] MULTI_CONFIG_DIR not found: ${MULTI_CONFIG_DIR}`);
+      process.exit(1);
+    }
+
+    const yamlFiles = readdirSync(MULTI_CONFIG_DIR)
+      .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
+      .sort();
+
+    if (yamlFiles.length === 0) {
+      console.error(`[COUNCIL] No YAML files found in ${MULTI_CONFIG_DIR}`);
+      process.exit(1);
+    }
+
+    // Pre-scan for existing councils to reuse IDs
+    const { db: tmpDb, sqlite: sqliteTemp } = createDb(DB_PATH);
+    const tmpStore = new DbStore(tmpDb);
+    const existingCouncils = tmpStore.listCouncils();
+    sqliteTemp.close();
+
+    for (const file of yamlFiles) {
+      const filePath = resolve(MULTI_CONFIG_DIR, file);
+      const config = loadConfigFile(filePath);
+      const match = existingCouncils.find(c => c.name === config.council.name);
+      configs.push({
+        councilId: match?.id,
+        config,
+      });
+      console.log(`[COUNCIL] Loaded config: "${config.council.name}" from ${file}${match ? ` (existing: ${match.id})` : ''}`);
+    }
+  } else if (CONFIG_PATH) {
+    const config = loadConfigFile(CONFIG_PATH);
     console.log(`[COUNCIL] Loaded config from ${CONFIG_PATH}: "${config.council.name}"`);
 
     // Check if this council already exists (by name) so we reuse its ID
-    const { db, sqlite: sqliteTemp } = createDb(DB_PATH);
-    const tmpStore = new DbStore(db);
+    const { db: tmpDb, sqlite: sqliteTemp } = createDb(DB_PATH);
+    const tmpStore = new DbStore(tmpDb);
     const existing = tmpStore.listCouncils();
     const match = existing.find((c) => c.name === config.council.name);
-    if (match) {
-      councilId = match.id;
-      console.log(`[COUNCIL] Using existing council: ${councilId}`);
-    }
     sqliteTemp.close();
+
+    configs.push({
+      councilId: match?.id,
+      config,
+    });
+
+    if (match) {
+      console.log(`[COUNCIL] Using existing council: ${match.id}`);
+    }
   } else {
     // Default minimal config for development
     const defaultYaml = `
@@ -211,19 +275,21 @@ council:
       system_prompt: "You are a development agent."
   event_routing: []
 `;
-    config = parseConfig(defaultYaml);
+    configs.push({ config: parseConfig(defaultYaml) });
     console.log('[COUNCIL] Using default development config');
   }
 
   const council = createApp({
     dbPath: DB_PATH,
-    config,
-    councilId,
+    configs,
     mcpBaseUrl: MCP_BASE_URL,
   });
 
-  console.log(`[COUNCIL] Council: ${council.councilId}`);
-  console.log(`[COUNCIL] Orchestrator initialized with ${config.council.agents.length} agent(s)`);
+  console.log(`[COUNCIL] Default council: ${council.councilId}`);
+  console.log(`[COUNCIL] Total councils: ${council.registry.size}`);
+  for (const { councilId, entry } of council.registry.list()) {
+    console.log(`[COUNCIL]   ${councilId}: "${entry.config.council.name}" (${entry.config.council.agents.length} agents)`);
+  }
 
   // Serve web UI static files (production) — only in main(), not in createApp()
   const webDistPath = resolve(import.meta.dirname ?? '.', '../../dist/web');
