@@ -1,7 +1,8 @@
+import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import bcrypt from 'bcrypt';
-import { users, userSessions, type DbClient } from './db.js';
+import { users, userSessions, apiKeys, type DbClient } from './db.js';
 
 const SALT_ROUNDS = 12;
 const RECOVERY_SALT_ROUNDS = 6; // Lower for recovery codes (many to compare)
@@ -203,8 +204,62 @@ export class UserStore {
   }
 
   deleteUser(userId: string): void {
-    // Delete user sessions first
+    // Delete user sessions and API keys first
     this.db.delete(userSessions).where(eq(userSessions.userId, userId)).run();
+    this.db.delete(apiKeys).where(eq(apiKeys.userId, userId)).run();
     this.db.delete(users).where(eq(users.id, userId)).run();
+  }
+
+  // ── API Keys ──
+
+  async createApiKey(
+    userId: string,
+    name: string,
+  ): Promise<{ key: string; id: string; keyPrefix: string }> {
+    const rawBytes = randomBytes(32);
+    const key = `ck_${rawBytes.toString('base64url')}`;
+    const keyPrefix = key.slice(0, 11); // "ck_" + 8 chars
+    const keyHash = await bcrypt.hash(key, SALT_ROUNDS);
+    const id = nanoid();
+    this.db.insert(apiKeys).values({
+      id,
+      userId,
+      name,
+      keyHash,
+      keyPrefix,
+      createdAt: new Date().toISOString(),
+    }).run();
+    return { key, id, keyPrefix };
+  }
+
+  async verifyApiKey(key: string): Promise<UserRow | null> {
+    if (!key.startsWith('ck_')) return null;
+    const prefix = key.slice(0, 11);
+    const rows = this.db.select().from(apiKeys).where(eq(apiKeys.keyPrefix, prefix)).all();
+    for (const row of rows) {
+      if (await bcrypt.compare(key, row.keyHash)) {
+        // Update last used
+        this.db.update(apiKeys)
+          .set({ lastUsedAt: new Date().toISOString() })
+          .where(eq(apiKeys.id, row.id))
+          .run();
+        return this.getUserById(row.userId);
+      }
+    }
+    return null;
+  }
+
+  listApiKeys(userId: string): Array<{ id: string; name: string; keyPrefix: string; createdAt: string; lastUsedAt: string | null }> {
+    return this.db.select({
+      id: apiKeys.id,
+      name: apiKeys.name,
+      keyPrefix: apiKeys.keyPrefix,
+      createdAt: apiKeys.createdAt,
+      lastUsedAt: apiKeys.lastUsedAt,
+    }).from(apiKeys).where(eq(apiKeys.userId, userId)).all();
+  }
+
+  deleteApiKey(keyId: string): void {
+    this.db.delete(apiKeys).where(eq(apiKeys.id, keyId)).run();
   }
 }

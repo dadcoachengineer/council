@@ -15,6 +15,7 @@ import { EscalationEngine } from '../engine/escalation-engine.js';
 import { createDb, DbStore } from './db.js';
 import { UserStore } from './user-store.js';
 import { createMcpRouter } from './mcp-server.js';
+import { createUserMcpRouter } from './mcp-user-server.js';
 import { createWebhookRouter } from './webhooks.js';
 import { createApiRouter } from './api.js';
 import { createAdminRouter } from './admin-api.js';
@@ -105,7 +106,11 @@ export function createApp(opts: CreateAppOptions): CouncilApp {
   // All other routes use standard JSON parser
   app.use(express.json({ limit: '1mb' }));
 
-  // MCP endpoint (no auth — agents use their own token-based auth)
+  // User MCP endpoint (Bearer API key auth)
+  const { router: userMcpRouter } = createUserMcpRouter(orchestrator, userStore);
+  app.use('/mcp/user', userMcpRouter);
+
+  // Agent MCP endpoint (no auth — agents use their own token-based auth)
   const { router: mcpRouter, notifyAgent } = createMcpRouter(orchestrator);
   app.use('/mcp', mcpRouter);
 
@@ -233,7 +238,8 @@ council:
 
   council.httpServer.listen(PORT, HOST, () => {
     console.log(`[COUNCIL] Server listening on http://${HOST}:${PORT}`);
-    console.log(`[COUNCIL] MCP endpoint: http://${HOST}:${PORT}/mcp`);
+    console.log(`[COUNCIL] MCP endpoint (agents): http://${HOST}:${PORT}/mcp`);
+    console.log(`[COUNCIL] MCP endpoint (users): http://${HOST}:${PORT}/mcp/user`);
     console.log(`[COUNCIL] Webhooks: http://${HOST}:${PORT}/webhooks/github, /webhooks/ingest`);
     console.log(`[COUNCIL] REST API: http://${HOST}:${PORT}/api`);
     console.log(`[COUNCIL] WebSocket: ws://${HOST}:${PORT}/ws`);
