@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import type { UserStore } from './user-store.js';
 import type { DbStore } from './db.js';
-import type { AgentRegistry } from '../engine/agent-registry.js';
+import type { OrchestratorRegistry } from '../engine/orchestrator-registry.js';
 import type { PublicUser } from '../shared/types.js';
 
 function toPublicUser(row: { id: string; email: string; displayName: string; role: string; totpVerified: number; createdAt: string }): PublicUser {
@@ -15,7 +15,7 @@ function toPublicUser(row: { id: string; email: string; displayName: string; rol
   };
 }
 
-export function createAdminRouter(userStore: UserStore, store?: DbStore, agentRegistry?: AgentRegistry, councilId?: string): Router {
+export function createAdminRouter(userStore: UserStore, store?: DbStore, registry?: OrchestratorRegistry): Router {
   const router = Router();
 
   // GET /api/admin/users — list all users
@@ -142,40 +142,74 @@ export function createAdminRouter(userStore: UserStore, store?: DbStore, agentRe
 
   // POST /api/admin/agent-tokens/:agentId — provision a persistent token for an agent
   router.post('/agent-tokens/:agentId', (req: Request, res: Response) => {
-    if (!store || !agentRegistry || !councilId) {
+    if (!store || !registry) {
       res.status(501).json({ error: 'Agent token management not available' });
       return;
     }
 
     const agentId = String(req.params.agentId);
-    const agent = agentRegistry.getAgent(agentId);
-    if (!agent) {
-      res.status(404).json({ error: `Agent "${agentId}" not found in config` });
+    const councilId = req.body.councilId as string | undefined;
+
+    if (!councilId) {
+      const defaultId = registry.getDefaultId();
+      if (!defaultId) {
+        res.status(400).json({ error: 'No council available. Provide councilId in request body.' });
+        return;
+      }
+      req.body.councilId = defaultId;
+    }
+
+    const resolvedCouncilId = req.body.councilId as string;
+    const entry = registry.get(resolvedCouncilId);
+    if (!entry) {
+      res.status(404).json({ error: `Council "${resolvedCouncilId}" not found` });
       return;
     }
 
-    // Check if token already exists
-    const existing = store.getPersistentToken(agentId);
+    const agentRegistry = entry.agentRegistry;
+    const agent = agentRegistry.getAgent(agentId);
+    if (!agent) {
+      res.status(404).json({ error: `Agent "${agentId}" not found in council "${resolvedCouncilId}"` });
+      return;
+    }
+
+    // Check if token already exists for this agent+council
+    const existing = store.getPersistentToken(agentId, resolvedCouncilId);
     if (existing) {
-      res.status(409).json({ error: `Agent "${agentId}" already has a persistent token. Delete it first to re-provision.` });
+      res.status(409).json({ error: `Agent "${agentId}" already has a persistent token for council "${resolvedCouncilId}". Delete it first to re-provision.` });
       return;
     }
 
     const token = agentRegistry.generatePersistentToken(agentId);
-    store.savePersistentToken(agentId, councilId, token);
-    res.status(201).json({ agentId, token });
+    store.savePersistentToken(agentId, resolvedCouncilId, token);
+    res.status(201).json({ agentId, councilId: resolvedCouncilId, token });
   });
 
   // DELETE /api/admin/agent-tokens/:agentId — revoke a persistent token
   router.delete('/agent-tokens/:agentId', (req: Request, res: Response) => {
-    if (!store || !agentRegistry) {
+    if (!store || !registry) {
       res.status(501).json({ error: 'Agent token management not available' });
       return;
     }
 
     const agentId = String(req.params.agentId);
-    store.deletePersistentToken(agentId);
-    agentRegistry.clearPersistentToken(agentId);
+    const councilId = (req.query.councilId ?? req.body?.councilId) as string | undefined;
+
+    // Clear from all matching agent registries
+    if (councilId) {
+      const entry = registry.get(councilId);
+      if (entry) {
+        entry.agentRegistry.clearPersistentToken(agentId);
+      }
+      store.deletePersistentToken(agentId, councilId);
+    } else {
+      // Clear from all councils
+      for (const { entry } of registry.list()) {
+        entry.agentRegistry.clearPersistentToken(agentId);
+      }
+      store.deletePersistentToken(agentId);
+    }
+
     res.json({ status: 'deleted' });
   });
 
