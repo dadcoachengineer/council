@@ -7,6 +7,7 @@ import type {
   VoteValue,
   Decision,
   CouncilConfig,
+  AgentConfig,
   AgentSpawner,
   IncomingEvent,
   DecisionOutcome,
@@ -63,6 +64,9 @@ export interface OrchestratorStore {
 
   saveEscalationEvent(event: EscalationEvent): void;
   getEscalationEvents(sessionId: string): EscalationEvent[];
+
+  addSessionParticipant(sessionId: string, agentId: string, role: 'lead' | 'consulted'): void;
+  getSessionParticipants(sessionId: string): Array<{ agentId: string; role: string }>;
 }
 
 export class Orchestrator {
@@ -134,23 +138,30 @@ export class Orchestrator {
       createdAt: new Date().toISOString(),
     };
 
+    // Collect topics from routing rule and event labels
+    const ruleTopics = route.matchedRule.assign.topics ?? [];
+    const eventLabels = this.extractEventLabels(event);
+    const topics = [...new Set([...ruleTopics, ...eventLabels])];
+
     // Create session
     const session = this.createSession({
       title: this.eventTitle(event),
       leadAgentId: route.lead,
       triggerEventId: incomingEvent.id,
       phase: 'investigation',
+      topics,
     });
 
     incomingEvent.sessionId = session.id;
     this.store.saveEvent(incomingEvent);
     this.emit({ type: 'event:received', event: incomingEvent });
 
-    // Spawn lead agent
+    // Spawn lead agent (already recorded as participant in createSession)
     await this.spawnAgent(session.id, route.lead, this.eventContext(event));
 
-    // Spawn consulted agents
+    // Spawn consulted agents and record as participants
     for (const consultId of route.consult) {
+      this.store.addSessionParticipant(session.id, consultId, 'consulted');
       await this.spawnAgent(session.id, consultId, `You have been consulted for session ${session.id}. Use council_get_context to see details.`);
     }
 
@@ -164,6 +175,7 @@ export class Orchestrator {
     leadAgentId?: string | null;
     triggerEventId?: string | null;
     phase?: SessionPhase;
+    topics?: string[];
   }): Session {
     const session: Session = {
       id: nanoid(),
@@ -174,11 +186,18 @@ export class Orchestrator {
       triggerEventId: opts.triggerEventId ?? null,
       activeProposalId: null,
       deliberationRound: 0,
+      topics: opts.topics ?? [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
     this.store.saveSession(session);
     this.emit({ type: 'session:created', session });
+
+    // Record lead agent as participant
+    if (session.leadAgentId) {
+      this.store.addSessionParticipant(session.id, session.leadAgentId, 'lead');
+    }
+
     return session;
   }
 
@@ -321,6 +340,9 @@ export class Orchestrator {
     // Send consultation message
     const message = this.sendMessage(sessionId, requestingAgentId, targetAgentId, question);
 
+    // Record as participant
+    this.store.addSessionParticipant(sessionId, targetAgentId, 'consulted');
+
     // Spawn the target agent if not connected
     if (!this.agentRegistry.isConnected(targetAgentId)) {
       await this.spawnAgent(
@@ -366,18 +388,57 @@ export class Orchestrator {
     this.store.saveVote(vote);
     this.emit({ type: 'vote:cast', vote });
 
-    // Check if all votes are in
+    // Check if all votes are in — scoped to session participants when available
     const allVotes = [...existingVotes, vote];
-    const agentIds = this.config.council.agents.map((a) => a.id);
-    if (allVotesCast(allVotes, agentIds)) {
+    const participants = this.store.getSessionParticipants(sessionId);
+    const quorum = this.config.council.rules.quorum;
+    // Use participant-scoped voting only when enough participants are tracked to meet quorum;
+    // otherwise fall back to all config agents for backwards compatibility
+    const expectedIds = participants.length >= quorum
+      ? participants.map(p => p.agentId)
+      : this.config.council.agents.map(a => a.id);
+    if (allVotesCast(allVotes, expectedIds)) {
       this.concludeVoting(sessionId, allVotes);
     }
 
     return vote;
   }
 
+  private computeEffectiveAgents(sessionTopics: string[], agents: AgentConfig[]): AgentConfig[] {
+    const dynamicWeights = this.config.council.rules.dynamic_weights;
+    if (!dynamicWeights?.enabled || sessionTopics.length === 0) {
+      return agents;
+    }
+
+    return agents.map(agent => {
+      const matchCount = agent.expertise.filter(e => sessionTopics.includes(e)).length;
+      const bonus = matchCount * dynamicWeights.expertise_match_bonus;
+      const effectiveWeight = Math.min(
+        agent.voting_weight + bonus,
+        agent.voting_weight * dynamicWeights.max_multiplier,
+      );
+      return { ...agent, voting_weight: effectiveWeight };
+    });
+  }
+
   private concludeVoting(sessionId: string, votes: Vote[]): void {
+    const session = this.store.getSession(sessionId);
     const scheme = createVotingScheme(this.config.council.rules.voting_scheme);
+
+    // Compute effective agents: filter to participants and adjust weights
+    const participants = this.store.getSessionParticipants(sessionId);
+    const quorum = this.config.council.rules.quorum;
+    const participantIds = participants.length >= quorum
+      ? new Set(participants.map(p => p.agentId))
+      : null; // null = not enough participants tracked, use all agents
+    const baseAgents = participantIds
+      ? this.config.council.agents.filter(a => participantIds.has(a.id))
+      : this.config.council.agents;
+    const effectiveAgents = this.computeEffectiveAgents(
+      session?.topics ?? [],
+      baseAgents,
+    );
+
     const ballots = votes.map((v) => ({
       agentId: v.agentId,
       value: v.value,
@@ -385,7 +446,7 @@ export class Orchestrator {
     }));
     const tally = scheme.tally(
       ballots,
-      this.config.council.agents,
+      effectiveAgents,
       this.config.council.rules,
     );
 
@@ -714,6 +775,15 @@ export class Orchestrator {
       return gh.issue?.title ?? gh.pull_request?.title ?? `GitHub ${event.eventType}`;
     }
     return `Webhook: ${event.eventType}`;
+  }
+
+  private extractEventLabels(event: WebhookEvent): string[] {
+    if (event.source === 'github') {
+      const gh = event.payload as { issue?: { labels: Array<{ name: string }> }; pull_request?: { labels: Array<{ name: string }> } };
+      const labels = gh.issue?.labels ?? gh.pull_request?.labels ?? [];
+      return labels.map(l => l.name);
+    }
+    return [];
   }
 
   private eventContext(event: WebhookEvent): string {

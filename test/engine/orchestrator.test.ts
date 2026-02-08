@@ -12,6 +12,7 @@ function createMockStore(): OrchestratorStore {
   const voteMap = new Map<string, Vote[]>();
   const decisionMap = new Map<string, Decision>();
   const eventList: IncomingEvent[] = [];
+  const participantMap = new Map<string, Array<{ agentId: string; role: string }>>();
 
   return {
     saveSession: (s) => sessions.set(s.id, { ...s }),
@@ -43,7 +44,7 @@ function createMockStore(): OrchestratorStore {
       list.push(v);
       voteMap.set(v.sessionId, list);
     },
-    getVotes: (sid) => voteMap.get(sid) ?? [],
+    getVotes: (sid) => [...(voteMap.get(sid) ?? [])],
     saveDecision: (d) => decisionMap.set(d.sessionId, d),
     getDecision: (sid) => decisionMap.get(sid) ?? null,
     updateDecision: (id, updates) => {
@@ -64,6 +65,14 @@ function createMockStore(): OrchestratorStore {
     listEvents: (_cid, limit = 50) => eventList.slice(0, limit),
     saveEscalationEvent: () => {},
     getEscalationEvents: () => [],
+    addSessionParticipant: (sessionId, agentId, role) => {
+      const list = participantMap.get(sessionId) ?? [];
+      if (!list.some(p => p.agentId === agentId)) {
+        list.push({ agentId, role });
+        participantMap.set(sessionId, list);
+      }
+    },
+    getSessionParticipants: (sessionId) => participantMap.get(sessionId) ?? [],
   };
 }
 

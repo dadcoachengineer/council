@@ -1,0 +1,138 @@
+version: "1"
+
+council:
+  name: "MomentumEQ Advisory Board"
+  description: "Cross-functional advisory board for product decisions, feature specs, and deployment plans"
+
+  spawner:
+    type: log
+
+  rules:
+    quorum: 3
+    voting_threshold: 0.6
+    max_deliberation_rounds: 5
+    require_human_approval: true
+    enable_refinement: true
+    voting_scheme:
+      type: weighted_majority
+    dynamic_weights:
+      enabled: true
+      expertise_match_bonus: 0.5
+      max_multiplier: 3.0
+    escalation:
+      - name: "deadlock_retry"
+        trigger: { type: deadlock }
+        action: { type: restart_discussion }
+        max_fires_per_session: 1
+      - name: "veto_escalate"
+        trigger: { type: veto_exercised }
+        action:
+          type: escalate_to_human
+          message: "Veto exercised — human review required"
+
+  agents:
+    - id: cto-cpo
+      name: "CTO/CPO"
+      role: "Chief Technology & Product Officer"
+      expertise: [architecture, security, scalability, product_strategy, feature_design, technical_debt]
+      can_propose: true
+      can_veto: true
+      voting_weight: 1.5
+      persistent: true
+      system_prompt: |
+        You are the CTO/CPO — responsible for technical architecture and product strategy.
+        Evaluate proposals for technical feasibility, security, scalability, and user value.
+
+    - id: cro
+      name: "CRO & Business Strategy"
+      role: "Chief Revenue Officer"
+      expertise: [business_strategy, revenue, market_analysis, partnerships, pricing]
+      can_propose: true
+      can_veto: false
+      voting_weight: 1.0
+      persistent: true
+      system_prompt: |
+        You are the CRO — responsible for revenue and business strategy.
+        Evaluate proposals for market fit, revenue impact, and business viability.
+
+    - id: legal
+      name: "Legal Counsel"
+      role: "General Counsel"
+      expertise: [compliance, data_privacy, terms_of_service, risk_assessment, contracts]
+      can_propose: true
+      can_veto: true
+      voting_weight: 1.0
+      persistent: true
+      system_prompt: |
+        You are Legal Counsel — responsible for compliance and risk management.
+        Flag legal risks, privacy concerns, and regulatory requirements.
+
+    - id: social-media
+      name: "Social Media"
+      role: "Social Media Director"
+      expertise: [social_media, content_strategy, brand, community, marketing]
+      can_propose: true
+      can_veto: false
+      voting_weight: 1.0
+      persistent: true
+      system_prompt: |
+        You are the Social Media Director — responsible for brand presence and content strategy.
+        Evaluate proposals for brand impact, messaging, and community engagement.
+
+    - id: infosec
+      name: "InfoSec"
+      role: "Chief Information Security Officer"
+      expertise: [security, infrastructure, compliance, incident_response, threat_modeling]
+      can_propose: true
+      can_veto: true
+      voting_weight: 1.0
+      persistent: true
+      system_prompt: |
+        You are the CISO — responsible for information security and infrastructure protection.
+        Evaluate proposals for security risks, attack surface, and compliance.
+
+    - id: cs-growth
+      name: "CS & Growth"
+      role: "Customer Success & Growth Lead"
+      expertise: [customer_success, onboarding, retention, growth, user_feedback]
+      can_propose: true
+      can_veto: false
+      voting_weight: 1.0
+      persistent: true
+      system_prompt: |
+        You are the CS & Growth Lead — responsible for customer success and growth.
+        Evaluate proposals for customer impact, onboarding experience, and retention.
+
+  communication_graph:
+    default_policy: broadcast
+    edges: {}
+
+  event_routing:
+    - match: { source: generic, type: feature_spec }
+      assign:
+        lead: cto-cpo
+        consult: [cro, cs-growth]
+        topics: [feature_design, product_strategy]
+
+    - match: { source: generic, type: security_review }
+      assign:
+        lead: infosec
+        consult: [cto-cpo, legal]
+        topics: [security, compliance]
+
+    - match: { source: generic, type: deployment_plan }
+      assign:
+        lead: cto-cpo
+        consult: [infosec, cs-growth]
+        topics: [architecture, infrastructure, scalability]
+
+    - match: { source: generic, type: marketing_campaign }
+      assign:
+        lead: social-media
+        consult: [cro, cs-growth]
+        topics: [social_media, brand, marketing]
+
+    - match: { source: generic }
+      assign:
+        lead: cto-cpo
+        consult: []

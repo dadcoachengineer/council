@@ -86,6 +86,16 @@ export class AgentRegistry {
     return this.agents.get(agentId)?.persistentToken ?? null;
   }
 
+  /** Clear a persistent token for an agent. */
+  clearPersistentToken(agentId: string): void {
+    const agent = this.agents.get(agentId);
+    if (!agent) return;
+    if (agent.persistentToken) {
+      this.persistentTokenToAgent.delete(agent.persistentToken);
+      agent.persistentToken = null;
+    }
+  }
+
   /** Resolve an agent ID from a connection token (checks both per-session and persistent). */
   resolveToken(token: string): string | null {
     return this.tokenToAgent.get(token)
