@@ -43,6 +43,7 @@ export interface AgentConfig {
   voting_weight: number;
   model?: string;
   system_prompt: string;
+  persistent?: boolean;
 }
 
 export interface AgentStatus {
@@ -51,6 +52,8 @@ export interface AgentStatus {
   role: string;
   connected: boolean;
   lastSeen: string | null;
+  connectionMode: 'per_session' | 'persistent';
+  activeSessions: string[];
 }
 
 // ── Council ──
@@ -165,7 +168,8 @@ export interface SpawnerConfig {
 export type AgentLifecycleEvent =
   | { type: 'agent:started'; agentId: string; sessionId: string }
   | { type: 'agent:completed'; agentId: string; sessionId: string; durationMs: number; cost?: number }
-  | { type: 'agent:errored'; agentId: string; sessionId: string; error: string };
+  | { type: 'agent:errored'; agentId: string; sessionId: string; error: string }
+  | { type: 'agent:session_assigned'; agentId: string; sessionId: string };
 
 export interface GithubConfig {
   webhook_secret: string;
@@ -252,12 +256,19 @@ export interface IncomingEvent {
 
 // ── Spawner ──
 
+export interface SessionAssignment {
+  sessionId: string;
+  role: 'lead' | 'consulted';
+  context: string;
+}
+
 export interface SpawnTask {
   sessionId: string;
   agentConfig: AgentConfig;
   context: string;
   councilMcpUrl: string;
   agentToken: string;
+  connectionMode?: 'per_session' | 'persistent';
 }
 
 export interface AgentSpawner {

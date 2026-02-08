@@ -60,6 +60,8 @@ function toWsEvent(event: OrchestratorEvent): WsEvent | null {
       return { type: 'event:received', event: event.event };
     case 'escalation:triggered':
       return { type: 'escalation:triggered', event: event.event };
+    case 'agent:session_assigned':
+      return { type: 'agent:session_assigned', agentId: event.agentId, sessionId: event.sessionId };
     default:
       return null;
   }

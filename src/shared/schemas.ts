@@ -79,6 +79,7 @@ const AgentConfigSchema = z.object({
   voting_weight: z.number().positive().default(1),
   model: z.string().optional(),
   system_prompt: z.string().min(1),
+  persistent: z.boolean().default(false),
 });
 
 const CommunicationGraphSchema = z.object({
