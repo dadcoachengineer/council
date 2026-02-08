@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import type BetterSqlite3 from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, real, primaryKey } from 'drizzle-orm/sqlite-core';
 import { eq, and, desc } from 'drizzle-orm';
 import type {
   Session,
@@ -37,6 +37,7 @@ export const sessions = sqliteTable('sessions', {
   triggerEventId: text('trigger_event_id'),
   activeProposalId: text('active_proposal_id'),
   deliberationRound: integer('deliberation_round').notNull().default(0),
+  topics: text('topics').notNull().default('[]'), // JSON array of expertise tags
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
@@ -120,6 +121,15 @@ export const apiKeys = sqliteTable('api_keys', {
   lastUsedAt: text('last_used_at'),
 });
 
+export const sessionParticipants = sqliteTable('session_participants', {
+  sessionId: text('session_id').notNull(),
+  agentId: text('agent_id').notNull(),
+  role: text('role').notNull().default('consulted'), // 'lead' | 'consulted'
+  joinedAt: text('joined_at').notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.sessionId, table.agentId] }),
+}));
+
 export const events = sqliteTable('events', {
   id: text('id').primaryKey(),
   councilId: text('council_id').notNull(),
@@ -143,6 +153,7 @@ const MIGRATIONS: ColumnMigration[] = [
   { table: 'sessions', column: 'active_proposal_id', type: 'TEXT' },
   { table: 'messages', column: 'parent_message_id', type: 'TEXT' },
   { table: 'messages', column: 'amendment_status', type: 'TEXT' },
+  { table: 'sessions', column: 'topics', type: "TEXT NOT NULL DEFAULT '[]'" },
 ];
 
 export function runMigrations(sqlite: Database.Database): void {
@@ -203,6 +214,7 @@ export function createDb(dbPath: string): { db: DbClient; sqlite: BetterSqlite3.
       trigger_event_id TEXT,
       active_proposal_id TEXT,
       deliberation_round INTEGER NOT NULL DEFAULT 0,
+      topics TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -300,6 +312,15 @@ export function createDb(dbPath: string): { db: DbClient; sqlite: BetterSqlite3.
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS session_participants (
+      session_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'consulted',
+      joined_at TEXT NOT NULL,
+      PRIMARY KEY (session_id, agent_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_participants_session ON session_participants(session_id);
+
     CREATE INDEX IF NOT EXISTS idx_sessions_council ON sessions(council_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_phase ON sessions(phase);
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
@@ -354,7 +375,10 @@ export class DbStore implements OrchestratorStore {
   // ── Sessions ──
 
   saveSession(session: Session): void {
-    this.db.insert(sessions).values(session).run();
+    this.db.insert(sessions).values({
+      ...session,
+      topics: JSON.stringify(session.topics),
+    }).run();
   }
 
   updateSession(id: string, updates: Partial<Session>): void {
@@ -364,37 +388,43 @@ export class DbStore implements OrchestratorStore {
     if (updates.updatedAt !== undefined) setClauses.updatedAt = updates.updatedAt;
     if (updates.leadAgentId !== undefined) setClauses.leadAgentId = updates.leadAgentId;
     if (updates.activeProposalId !== undefined) setClauses.activeProposalId = updates.activeProposalId;
+    if (updates.topics !== undefined) setClauses.topics = JSON.stringify(updates.topics);
 
     this.db.update(sessions).set(setClauses).where(eq(sessions.id, id)).run();
   }
 
+  private parseSessionRow(row: Record<string, unknown>): Session {
+    return {
+      ...row,
+      topics: JSON.parse((row.topics as string) ?? '[]') as string[],
+    } as Session;
+  }
+
   getSession(id: string): Session | null {
     const rows = this.db.select().from(sessions).where(eq(sessions.id, id)).all();
-    return (rows[0] as Session | undefined) ?? null;
+    if (rows.length === 0) return null;
+    return this.parseSessionRow(rows[0] as Record<string, unknown>);
   }
 
   listSessions(councilId?: string, phase?: SessionPhase): Session[] {
+    let query;
     if (councilId && phase) {
-      return this.db.select().from(sessions)
+      query = this.db.select().from(sessions)
         .where(and(eq(sessions.councilId, councilId), eq(sessions.phase, phase)))
-        .orderBy(desc(sessions.createdAt))
-        .all() as Session[];
-    }
-    if (councilId) {
-      return this.db.select().from(sessions)
+        .orderBy(desc(sessions.createdAt));
+    } else if (councilId) {
+      query = this.db.select().from(sessions)
         .where(eq(sessions.councilId, councilId))
-        .orderBy(desc(sessions.createdAt))
-        .all() as Session[];
-    }
-    if (phase) {
-      return this.db.select().from(sessions)
+        .orderBy(desc(sessions.createdAt));
+    } else if (phase) {
+      query = this.db.select().from(sessions)
         .where(eq(sessions.phase, phase))
-        .orderBy(desc(sessions.createdAt))
-        .all() as Session[];
+        .orderBy(desc(sessions.createdAt));
+    } else {
+      query = this.db.select().from(sessions)
+        .orderBy(desc(sessions.createdAt));
     }
-    return this.db.select().from(sessions)
-      .orderBy(desc(sessions.createdAt))
-      .all() as Session[];
+    return query.all().map(row => this.parseSessionRow(row as Record<string, unknown>));
   }
 
   // ── Messages ──
@@ -516,6 +546,36 @@ export class DbStore implements OrchestratorStore {
       agentId: agentTokens.agentId,
       token: agentTokens.token,
     }).from(agentTokens).where(eq(agentTokens.councilId, councilId)).all();
+  }
+
+  // ── Session Participants ──
+
+  addSessionParticipant(sessionId: string, agentId: string, role: 'lead' | 'consulted'): void {
+    this.db.insert(sessionParticipants).values({
+      sessionId,
+      agentId,
+      role,
+      joinedAt: new Date().toISOString(),
+    }).onConflictDoNothing().run();
+  }
+
+  getSessionParticipants(sessionId: string): Array<{ agentId: string; role: string }> {
+    return this.db.select({
+      agentId: sessionParticipants.agentId,
+      role: sessionParticipants.role,
+    }).from(sessionParticipants).where(eq(sessionParticipants.sessionId, sessionId)).all();
+  }
+
+  // ── Agent Tokens (admin listing) ──
+
+  listAllPersistentTokens(): Array<{ agentId: string; councilId: string; tokenPrefix: string; createdAt: string; lastUsedAt: string | null }> {
+    return this.db.select().from(agentTokens).all().map(row => ({
+      agentId: row.agentId,
+      councilId: row.councilId,
+      tokenPrefix: row.token.slice(0, 20) + '...',
+      createdAt: row.createdAt,
+      lastUsedAt: row.lastUsedAt,
+    }));
   }
 
   listEvents(councilId?: string, limit = 50): IncomingEvent[] {

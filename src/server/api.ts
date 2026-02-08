@@ -67,13 +67,17 @@ export function createApiRouter(orchestrator: Orchestrator, store: DbStore): Rou
   });
 
   router.post('/sessions', (req: Request, res: Response) => {
-    const { title } = req.body;
+    const { title, topics } = req.body;
     if (!title || typeof title !== 'string') {
       res.status(400).json({ error: 'Request body must include "title" string field' });
       return;
     }
+    if (topics !== undefined && (!Array.isArray(topics) || !topics.every((t: unknown) => typeof t === 'string'))) {
+      res.status(400).json({ error: '"topics" must be an array of strings' });
+      return;
+    }
 
-    const session = orchestrator.createSession({ title });
+    const session = orchestrator.createSession({ title, topics });
     res.status(201).json(session);
   });
 

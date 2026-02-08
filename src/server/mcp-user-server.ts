@@ -96,9 +96,10 @@ function registerUserTools(
       inputSchema: {
         title: z.string().describe('Session title/topic'),
         lead_agent_id: z.string().optional().describe('Lead agent ID (optional)'),
+        topics: z.array(z.string()).optional().describe('Expertise tags for dynamic voting weights (optional)'),
       },
     },
-    async ({ title, lead_agent_id }, extra) => {
+    async ({ title, lead_agent_id, topics }, extra) => {
       const user = getUser(extra);
       if (!user) {
         return { content: [{ type: 'text', text: 'Error: Not authenticated' }], isError: true };
@@ -107,6 +108,7 @@ function registerUserTools(
         const session = orchestrator.createSession({
           title,
           leadAgentId: lead_agent_id ?? null,
+          topics,
         });
         return {
           content: [{

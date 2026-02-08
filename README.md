@@ -27,7 +27,9 @@ Council is an orchestrator that lets AI agents debate, propose, refine, and vote
 - **MCP-native** — agents connect as standard MCP clients, bringing their own tools and capabilities
 - **Zero-config agents** — define personas in YAML; Council handles spawning, routing, and state management
 - **Persistent agents** — agents can stay connected across sessions, receiving new assignments without re-spawning
+- **Dynamic voting weights** — expertise-topic matching automatically adjusts agent influence per session
 - **Multi-user auth** — session-based authentication with optional TOTP 2FA and role-based access control
+- **MCP for humans too** — a dedicated `/mcp/user` endpoint lets Claude Desktop, Cursor, and VS Code manage sessions, review decisions, and browse resources via API key auth
 
 ## How It Works
 
@@ -70,7 +72,7 @@ CONFIG_PATH=config/examples/board-of-directors.yaml pnpm dev
 
 This spins up a 4-agent board (CTO, CPO, Legal, CFO) with escalation rules, veto power, and weighted voting.
 
-More example configs in [`config/examples/`](config/examples/): `minimal-two-agent`, `code-review-council`, `security-review-board`, `incident-response-team`, `advisory-panel`.
+More example configs in [`config/examples/`](config/examples/): `minimal-two-agent`, `code-review-council`, `security-review-board`, `incident-response-team`, `advisory-panel`, `momentumeq-board` (6-agent board with dynamic weights and session topics).
 
 ### Run tests
 
@@ -150,6 +152,10 @@ council:
       type: supermajority
       preset: two_thirds
     enable_refinement: true
+    dynamic_weights:               # Optional: expertise-topic weight adjustment
+      enabled: true
+      expertise_match_bonus: 0.5   # Added per matching expertise tag
+      max_multiplier: 3.0          # Cap on total effective weight
     escalation:
       - name: "deadlock_retry"
         trigger: { type: deadlock }
@@ -157,7 +163,10 @@ council:
 
   event_routing:
     - match: { source: github, type: issues.opened, labels: [bug] }
-      assign: { lead: cto, consult: [cpo] }
+      assign:
+        lead: cto
+        consult: [cpo]
+        topics: [architecture, security]  # Session expertise tags
 ```
 
 ### Config Sections
@@ -165,9 +174,10 @@ council:
 | Section | Purpose |
 |---------|---------|
 | `council.agents` | Agent personas — roles, expertise, voting weights, veto power, system prompts |
-| `council.rules` | Governance — quorum, threshold, voting scheme, refinement, max rounds |
+| `council.rules` | Governance — quorum, threshold, voting scheme, refinement, max rounds, dynamic weights |
 | `council.rules.escalation` | Auto-escalation on deadlock, timeout, veto, quorum failure, or max rounds |
-| `council.event_routing` | Route events to lead/consult agents by source, type, and labels |
+| `council.rules.dynamic_weights` | Optional expertise-topic weight adjustment at vote tally time |
+| `council.event_routing` | Route events to lead/consult agents by source, type, labels, and topics |
 | `council.communication_graph` | Control which agents can message each other |
 | `council.spawner` | Agent launch mode: `log` (dev), `webhook`, or `sdk` (production) |
 
@@ -226,7 +236,9 @@ Council uses multi-user session-based authentication with optional TOTP two-fact
 - **First-run setup**: `POST /auth/setup` creates the initial admin user
 - **Login**: `POST /auth/login` returns a session cookie; supports optional TOTP verification via `POST /auth/2fa/verify`
 - **User management**: Admins can create and manage users at `/api/admin/users`
-- **MCP endpoint**: `/mcp` is exempt from auth — agents authenticate with their own `x-agent-token` header
+- **MCP endpoint (agents)**: `/mcp` is exempt from auth — agents authenticate with their own `x-agent-token` header
+- **MCP endpoint (users)**: `/mcp/user` authenticates via `Authorization: Bearer <api-key>` — for human MCP clients
+- **API key management**: Admins create/list/revoke API keys at `/api/admin/api-keys`
 
 ## Architecture
 
@@ -254,6 +266,12 @@ src/
 | `POST /auth/setup` | First-run admin user creation |
 | `POST /auth/login` | Login (returns session cookie) |
 | `GET /api/admin/users` | List users (admin only) |
+| `POST /api/admin/api-keys` | Create API key for a user (admin only) |
+| `GET /api/admin/api-keys` | List API keys for a user (admin only) |
+| `DELETE /api/admin/api-keys/:id` | Revoke an API key (admin only) |
+| `GET /api/admin/agent-tokens` | List persistent agent tokens (admin only) |
+| `POST /api/admin/agent-tokens/:agentId` | Provision a persistent token (admin only) |
+| `DELETE /api/admin/agent-tokens/:agentId` | Revoke a persistent token (admin only) |
 | `ws://host/ws` | WebSocket for real-time UI updates |
 
 ### MCP Tools (Agent-Facing)
@@ -276,6 +294,25 @@ Agents connect to `/mcp` via Streamable HTTP and use these tools:
 | `council_list_councils` | List available councils |
 | `council_get_assignments` | Get current session assignments (persistent agents) |
 
+### MCP Tools (User-Facing)
+
+Human MCP clients (Claude Desktop, Cursor, VS Code) connect to `/mcp/user` with an API key and get access to:
+
+| Tool | Description |
+|------|-------------|
+| `council_user_list_sessions` | List sessions with optional phase filter |
+| `council_user_get_session` | Full session details with messages, votes, decision |
+| `council_user_create_session` | Create a new deliberation session |
+| `council_user_submit_review` | Approve, reject, or send back a decision |
+| `council_user_list_pending_decisions` | List decisions awaiting human review |
+| `council_user_get_agents` | Get agent connection statuses |
+| `council_user_transition_phase` | Manually advance a session's phase |
+| `council_user_ingest_event` | Ingest an event to trigger routing |
+
+**Resources** (`council://` URI scheme): `config`, `agents`, `decisions/pending`, `sessions`, `sessions/{sessionId}`
+
+**Prompts**: `start-deliberation`, `review-decisions`, `check-agents`
+
 ### Environment Variables
 
 | Variable | Default | Description |
@@ -297,7 +334,7 @@ Agents connect to `/mcp` via Streamable HTTP and use these tools:
 | **Database** | SQLite (better-sqlite3 + Drizzle ORM) |
 | **Agent Protocol** | MCP (Model Context Protocol) via @modelcontextprotocol/sdk |
 | **Agent Spawning** | Claude Agent SDK or webhook-based |
-| **Testing** | Vitest — 231 tests |
+| **Testing** | Vitest — 265 tests |
 
 ## Contributing
 

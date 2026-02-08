@@ -76,6 +76,12 @@ export interface VotingSchemeConfig {
 export type AmendmentStatus = 'proposed' | 'accepted' | 'rejected';
 export type AmendmentResolution = 'lead_resolves' | 'auto_accept';
 
+export interface DynamicWeightConfig {
+  enabled: boolean;
+  expertise_match_bonus: number;
+  max_multiplier: number;
+}
+
 export interface CouncilRules {
   quorum: number;
   voting_threshold: number;
@@ -86,6 +92,7 @@ export interface CouncilRules {
   enable_refinement?: boolean;
   max_amendments?: number;
   amendment_resolution?: AmendmentResolution;
+  dynamic_weights?: DynamicWeightConfig;
 }
 
 // ── Escalation ──
@@ -152,6 +159,7 @@ export interface EventRoutingRule {
   assign: {
     lead: string;
     consult: string[];
+    topics?: string[];
   };
 }
 
@@ -209,6 +217,7 @@ export interface Session {
   triggerEventId: string | null;
   activeProposalId: string | null;
   deliberationRound: number;
+  topics: string[];
   createdAt: string;
   updatedAt: string;
 }

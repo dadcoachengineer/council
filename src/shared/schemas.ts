@@ -41,6 +41,12 @@ const VotingSchemeConfigSchema = z.object({
   threshold: z.number().min(0).max(1).optional(),
 });
 
+const DynamicWeightConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  expertise_match_bonus: z.number().positive().default(0.5),
+  max_multiplier: z.number().positive().default(3.0),
+});
+
 const CouncilRulesSchema = z.object({
   quorum: z.number().int().min(1),
   voting_threshold: z.number().min(0).max(1),
@@ -50,6 +56,7 @@ const CouncilRulesSchema = z.object({
   enable_refinement: z.boolean().default(true),
   max_amendments: z.number().int().min(1).default(10),
   amendment_resolution: z.enum(['lead_resolves', 'auto_accept']).default('lead_resolves'),
+  dynamic_weights: DynamicWeightConfigSchema.optional(),
   escalation: z.preprocess(
     (val) => {
       if (!Array.isArray(val)) return val;
@@ -96,6 +103,7 @@ const EventRoutingMatchSchema = z.object({
 const EventRoutingAssignSchema = z.object({
   lead: z.string(),
   consult: z.array(z.string()).default([]),
+  topics: z.array(z.string()).default([]),
 });
 
 const EventRoutingRuleSchema = z.object({

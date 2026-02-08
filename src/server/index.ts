@@ -138,7 +138,7 @@ export function createApp(opts: CreateAppOptions): CouncilApp {
   });
 
   // Admin routes (require admin role)
-  app.use('/api/admin', auth.protect, auth.requireAdmin, createAdminRouter(userStore));
+  app.use('/api/admin', auth.protect, auth.requireAdmin, createAdminRouter(userStore, store, agentRegistry, councilId));
 
   // REST API (protected)
   app.use('/api', auth.protect, createApiRouter(orchestrator, store));

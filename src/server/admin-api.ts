@@ -1,5 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import type { UserStore } from './user-store.js';
+import type { DbStore } from './db.js';
+import type { AgentRegistry } from '../engine/agent-registry.js';
 import type { PublicUser } from '../shared/types.js';
 
 function toPublicUser(row: { id: string; email: string; displayName: string; role: string; totpVerified: number; createdAt: string }): PublicUser {
@@ -13,7 +15,7 @@ function toPublicUser(row: { id: string; email: string; displayName: string; rol
   };
 }
 
-export function createAdminRouter(userStore: UserStore): Router {
+export function createAdminRouter(userStore: UserStore, store?: DbStore, agentRegistry?: AgentRegistry, councilId?: string): Router {
   const router = Router();
 
   // GET /api/admin/users — list all users
@@ -123,6 +125,57 @@ export function createAdminRouter(userStore: UserStore): Router {
   router.delete('/api-keys/:id', (req: Request, res: Response) => {
     const keyId = String(req.params.id);
     userStore.deleteApiKey(keyId);
+    res.json({ status: 'deleted' });
+  });
+
+  // ── Agent Tokens ──
+
+  // GET /api/admin/agent-tokens — list all persistent agent tokens
+  router.get('/agent-tokens', (_req: Request, res: Response) => {
+    if (!store) {
+      res.status(501).json({ error: 'Agent token management not available' });
+      return;
+    }
+    const tokens = store.listAllPersistentTokens();
+    res.json(tokens);
+  });
+
+  // POST /api/admin/agent-tokens/:agentId — provision a persistent token for an agent
+  router.post('/agent-tokens/:agentId', (req: Request, res: Response) => {
+    if (!store || !agentRegistry || !councilId) {
+      res.status(501).json({ error: 'Agent token management not available' });
+      return;
+    }
+
+    const agentId = String(req.params.agentId);
+    const agent = agentRegistry.getAgent(agentId);
+    if (!agent) {
+      res.status(404).json({ error: `Agent "${agentId}" not found in config` });
+      return;
+    }
+
+    // Check if token already exists
+    const existing = store.getPersistentToken(agentId);
+    if (existing) {
+      res.status(409).json({ error: `Agent "${agentId}" already has a persistent token. Delete it first to re-provision.` });
+      return;
+    }
+
+    const token = agentRegistry.generatePersistentToken(agentId);
+    store.savePersistentToken(agentId, councilId, token);
+    res.status(201).json({ agentId, token });
+  });
+
+  // DELETE /api/admin/agent-tokens/:agentId — revoke a persistent token
+  router.delete('/agent-tokens/:agentId', (req: Request, res: Response) => {
+    if (!store || !agentRegistry) {
+      res.status(501).json({ error: 'Agent token management not available' });
+      return;
+    }
+
+    const agentId = String(req.params.agentId);
+    store.deletePersistentToken(agentId);
+    agentRegistry.clearPersistentToken(agentId);
     res.json({ status: 'deleted' });
   });
 

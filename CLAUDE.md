@@ -60,7 +60,7 @@ Tool registration uses: `server.registerTool(name, {inputSchema: {key: z.schema(
 
 ### Schema
 
-Tables defined in `src/server/db.ts` using Drizzle ORM: `councils`, `sessions`, `messages`, `votes`, `decisions`, `events`, `escalation_events`, `users`, `user_sessions`, `agent_tokens`.
+Tables defined in `src/server/db.ts` using Drizzle ORM: `councils`, `sessions`, `messages`, `votes`, `decisions`, `events`, `escalation_events`, `users`, `user_sessions`, `agent_tokens`, `api_keys`, `session_participants`.
 
 ### Adding New Columns
 
@@ -111,13 +111,13 @@ const council = createApp({
 - Vitest config in `vitest.config.ts`
 - Use in-memory or temp-dir SQLite databases for DB tests
 - Integration tests use `createApp()` with ephemeral ports (`listen(0)`) and temp directories
-- 231 tests: unit (engine, shared), server (auth, webhooks, migrations, user-store), and e2e integration
+- 265 tests: unit (engine, shared), server (auth, webhooks, migrations, user-store, user MCP), and e2e integration
 
 ## Configuration
 
 Council YAML config is validated by Zod schemas in `src/shared/schemas.ts`. Types in `src/shared/types.ts`.
 
-Key config sections: `agents`, `rules` (including `voting_scheme`, `escalation`, refinement settings), `event_routing`, `communication_graph`, `spawner`.
+Key config sections: `agents`, `rules` (including `voting_scheme`, `escalation`, refinement settings, `dynamic_weights`), `event_routing`, `communication_graph`, `spawner`.
 
 ### Persistent Agents
 
@@ -129,6 +129,47 @@ Agents can be configured with `persistent: true` in YAML. Persistent agents:
 
 The `createMcpRouter()` return type is `{ router, notifyAgent }` — the `notifyAgent` callback is wired into the orchestrator via `orchestrator.setNotifyPersistentAgent()`.
 
+### Admin Agent Token API
+
+External agents (e.g., Claude Cowork personas) need pre-provisioned tokens. Admin routes in `src/server/admin-api.ts`:
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/api/admin/agent-tokens` | GET | List all persistent tokens (prefix only, not full token) |
+| `/api/admin/agent-tokens/:agentId` | POST | Provision a token — returns full token once |
+| `/api/admin/agent-tokens/:agentId` | DELETE | Revoke a token |
+
+`createAdminRouter(userStore, store?, agentRegistry?, councilId?)` — the extra params enable token management when provided.
+
+### Session Topics & Dynamic Weights
+
+Sessions carry `topics: string[]` — expertise tags populated from routing rules (`assign.topics`) and GitHub event labels. Default is `[]` (backwards compatible).
+
+Optional `dynamic_weights` in `rules`:
+
+```yaml
+rules:
+  dynamic_weights:
+    enabled: true
+    expertise_match_bonus: 0.5  # Weight added per matching tag
+    max_multiplier: 3.0         # Cap on total effective weight
+```
+
+Weight computation: `min(base_weight + matches * bonus, base_weight * max_multiplier)`. Applied in `Orchestrator.computeEffectiveAgents()` during `concludeVoting()`. No changes to the `VotingScheme` interface — the orchestrator pre-computes effective weights and passes modified `AgentConfig[]` to `tally()`.
+
+When `dynamic_weights` is undefined or `enabled: false`, or when a session has no topics, all weights remain static.
+
+### Session Participants
+
+The `session_participants` table (`session_id`, `agent_id`, `role`, `joined_at`) tracks which agents are assigned to each session. Participants are recorded when:
+- `createSession()` is called with a `leadAgentId`
+- `handleWebhookEvent()` assigns lead and consult agents
+- `consultAgent()` brings in a new agent
+
+Voting uses participants instead of all config agents to determine when all votes are cast: `allVotesCast(votes, participantIds)`. **Fallback**: when participant count < quorum, falls back to all config agents for backwards compatibility.
+
+`OrchestratorStore` interface includes `addSessionParticipant()` and `getSessionParticipants()`.
+
 ### Authentication
 
 Multi-user auth with session cookies and optional TOTP 2FA. Key files:
@@ -136,7 +177,30 @@ Multi-user auth with session cookies and optional TOTP 2FA. Key files:
 - `src/server/user-store.ts` — `UserStore` class for user CRUD, password hashing (bcrypt), TOTP secret management
 - `src/server/admin-api.ts` — admin-only user management routes (`/api/admin/users`)
 
-First user created via `POST /auth/setup` becomes admin. Subsequent users are created by admins. The MCP endpoint (`/mcp`) is exempt from auth — agents authenticate via their own token header (`x-agent-token`).
+First user created via `POST /auth/setup` becomes admin. Subsequent users are created by admins. The agent MCP endpoint (`/mcp`) is exempt from auth — agents authenticate via their own token header (`x-agent-token`).
+
+### API Keys
+
+API keys authenticate human MCP clients (Claude Desktop, Cursor, etc.) at the `/mcp/user` endpoint. Key files:
+- `src/server/user-store.ts` — `createApiKey`, `verifyApiKey`, `listApiKeys`, `deleteApiKey` methods on `UserStore`
+- `src/server/admin-api.ts` — admin routes: `POST /api/admin/api-keys`, `GET /api/admin/api-keys?userId=`, `DELETE /api/admin/api-keys/:id`
+- `src/server/db.ts` — `api_keys` table (Drizzle schema + `CREATE TABLE IF NOT EXISTS`)
+
+Keys are `ck_<32-byte-base64url>`, stored as bcrypt hashes. Lookup uses a prefix index (`key[0:11]`). The plaintext key is returned only once at creation time.
+
+### User-Facing MCP Endpoint
+
+`src/server/mcp-user-server.ts` exposes `/mcp/user` for human MCP clients. Authenticates via `Authorization: Bearer ck_...` header using `UserStore.verifyApiKey()`.
+
+`createUserMcpRouter(orchestrator, userStore)` returns `{ router }` — mounted in `src/server/index.ts` BEFORE `/mcp` (more-specific path first).
+
+**8 tools** (prefixed `council_user_` to avoid collision with agent tools): `list_sessions`, `get_session`, `create_session`, `submit_review`, `list_pending_decisions`, `get_agents`, `transition_phase`, `ingest_event`.
+
+**5 resources** via `council://` URI scheme: `config`, `agents`, `decisions/pending`, `sessions`, `sessions/{sessionId}` (template with list callback).
+
+**3 prompts**: `start-deliberation`, `review-decisions`, `check-agents`.
+
+User identity is stored in a `Map<string, PublicUser>` keyed by MCP session ID, populated at auth time and passed into tool callbacks via `extra.sessionId`.
 
 ## CI / Docker
 
