@@ -6,6 +6,7 @@ import type { Router, Request, Response } from 'express';
 import { Router as createRouter } from 'express';
 import type { Orchestrator } from '../engine/orchestrator.js';
 import { createVotingScheme } from '../engine/voting-schemes/index.js';
+import type { SessionAssignment } from '../shared/types.js';
 
 /**
  * Register all agent-facing tools on an McpServer instance.
@@ -395,6 +396,40 @@ function registerTools(server: McpServer, orchestrator: Orchestrator): void {
     },
   );
 
+  // ── Tool: council_get_assignments ──
+  server.registerTool(
+    'council_get_assignments',
+    {
+      description: 'Get current session assignments for a persistent agent. Returns all active sessions the agent is participating in.',
+      inputSchema: {
+        agent_token: z.string().describe('Your agent authentication token'),
+      },
+    },
+    async ({ agent_token }) => {
+      const agentId = registry.resolveToken(agent_token);
+      if (!agentId) {
+        return { content: [{ type: 'text', text: 'Error: Invalid agent token' }], isError: true };
+      }
+      registry.touch(agentId);
+
+      const sessionIds = registry.getActiveSessions(agentId);
+      const assignments = sessionIds.map((sid) => {
+        const session = orchestrator.getSession(sid);
+        if (!session) return null;
+        return {
+          sessionId: sid,
+          title: session.title,
+          phase: session.phase,
+          role: session.leadAgentId === agentId ? 'lead' : 'consulted',
+        };
+      }).filter(Boolean);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(assignments, null, 2) }],
+      };
+    },
+  );
+
 }
 
 /**
@@ -413,16 +448,24 @@ function createServerInstance(orchestrator: Orchestrator): McpServer {
   return server;
 }
 
+export interface McpRouterResult {
+  router: Router;
+  notifyAgent: (agentId: string, assignment: SessionAssignment) => Promise<boolean>;
+}
+
 /**
  * Create the MCP Express router for the /mcp endpoint.
  * Supports multiple concurrent agent connections, each with
  * its own McpServer + StreamableHTTPServerTransport pair.
  */
-export function createMcpRouter(orchestrator: Orchestrator): Router {
+export function createMcpRouter(orchestrator: Orchestrator): McpRouterResult {
   const router = createRouter();
   const transports = new Map<string, StreamableHTTPServerTransport>();
   const servers = new Map<string, McpServer>();
   const registry = orchestrator.getAgentRegistry();
+
+  // Persistent agent connections keyed by agentId
+  const persistentConnections = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport; mcpSessionId: string }>();
 
   // ── Express routes ──
 
@@ -445,16 +488,53 @@ export function createMcpRouter(orchestrator: Orchestrator): Router {
             const agentId = registry.resolveToken(token);
             if (agentId) {
               registry.connect(agentId);
+              // Track persistent agent connections
+              if (registry.isPersistent(agentId)) {
+                persistentConnections.set(agentId, { server, transport, mcpSessionId: id });
+              }
             }
           }
         },
         onsessionclosed: (id) => {
           transports.delete(id);
           servers.delete(id);
+          // Clean up persistent connection if this was one
+          for (const [agentId, conn] of persistentConnections) {
+            if (conn.mcpSessionId === id) {
+              persistentConnections.delete(agentId);
+              break;
+            }
+          }
         },
       });
       await server.connect(transport);
     } else {
+      // Check if this is a persistent agent reconnecting with a stale session
+      const token = req.headers['x-agent-token'] as string | undefined;
+      if (token) {
+        const agentId = registry.resolveToken(token);
+        if (agentId && registry.isPersistent(agentId)) {
+          // Replace stale transport with new connection
+          const server = createServerInstance(orchestrator);
+          transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => randomUUID(),
+            onsessioninitialized: (id) => {
+              transports.set(id, transport);
+              servers.set(id, server);
+              registry.connect(agentId);
+              persistentConnections.set(agentId, { server, transport, mcpSessionId: id });
+            },
+            onsessionclosed: (id) => {
+              transports.delete(id);
+              servers.delete(id);
+              persistentConnections.delete(agentId);
+            },
+          });
+          await server.connect(transport);
+          await transport.handleRequest(req, res, req.body);
+          return;
+        }
+      }
       res.status(400).json({ error: 'Invalid session' });
       return;
     }
@@ -482,5 +562,20 @@ export function createMcpRouter(orchestrator: Orchestrator): Router {
     servers.delete(sessionId);
   });
 
-  return router;
+  async function notifyAgent(agentId: string, assignment: SessionAssignment): Promise<boolean> {
+    const conn = persistentConnections.get(agentId);
+    if (!conn) return false;
+    try {
+      await conn.server.server.sendLoggingMessage({
+        level: 'info',
+        logger: 'council',
+        data: { type: 'session_assigned', ...assignment },
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  return { router, notifyAgent };
 }

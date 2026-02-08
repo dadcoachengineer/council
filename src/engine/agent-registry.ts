@@ -5,6 +5,9 @@ interface RegisteredAgent {
   connected: boolean;
   lastSeen: Date | null;
   token: string | null;
+  connectionMode: 'per_session' | 'persistent';
+  activeSessions: Set<string>;
+  persistentToken: string | null;
 }
 
 /**
@@ -14,6 +17,7 @@ interface RegisteredAgent {
 export class AgentRegistry {
   private agents = new Map<string, RegisteredAgent>();
   private tokenToAgent = new Map<string, string>();
+  private persistentTokenToAgent = new Map<string, string>();
 
   /** Load agents from council config. */
   loadAgents(agents: AgentConfig[]): void {
@@ -23,6 +27,9 @@ export class AgentRegistry {
         connected: false,
         lastSeen: null,
         token: null,
+        connectionMode: config.persistent ? 'persistent' : 'per_session',
+        activeSessions: new Set(),
+        persistentToken: null,
       });
     }
   }
@@ -33,16 +40,83 @@ export class AgentRegistry {
     if (!agent) {
       throw new Error(`Unknown agent: ${agentId}`);
     }
-    // Simple token: council_<agentId>_<random>
+
+    // Persistent agents reuse their persistent token
+    if (agent.connectionMode === 'persistent') {
+      if (agent.persistentToken) {
+        return agent.persistentToken;
+      }
+      return this.generatePersistentToken(agentId);
+    }
+
+    // Per-session agents get a fresh token each time
     const token = `council_${agentId}_${crypto.randomUUID().slice(0, 8)}`;
     agent.token = token;
     this.tokenToAgent.set(token, agentId);
     return token;
   }
 
-  /** Resolve an agent ID from a connection token. */
+  /** Generate a persistent token for an agent. Idempotent — returns existing if already set. */
+  generatePersistentToken(agentId: string): string {
+    const agent = this.agents.get(agentId);
+    if (!agent) {
+      throw new Error(`Unknown agent: ${agentId}`);
+    }
+
+    if (agent.persistentToken) {
+      return agent.persistentToken;
+    }
+
+    const token = `council_persistent_${agentId}_${crypto.randomUUID().slice(0, 8)}`;
+    agent.persistentToken = token;
+    this.persistentTokenToAgent.set(token, agentId);
+    return token;
+  }
+
+  /** Set a persistent token loaded from DB. */
+  setPersistentToken(agentId: string, token: string): void {
+    const agent = this.agents.get(agentId);
+    if (!agent) return;
+    agent.persistentToken = token;
+    this.persistentTokenToAgent.set(token, agentId);
+  }
+
+  /** Get persistent token for an agent, or null. */
+  getPersistentToken(agentId: string): string | null {
+    return this.agents.get(agentId)?.persistentToken ?? null;
+  }
+
+  /** Resolve an agent ID from a connection token (checks both per-session and persistent). */
   resolveToken(token: string): string | null {
-    return this.tokenToAgent.get(token) ?? null;
+    return this.tokenToAgent.get(token)
+      ?? this.persistentTokenToAgent.get(token)
+      ?? null;
+  }
+
+  /** Track a session assignment for an agent. */
+  assignSession(agentId: string, sessionId: string): void {
+    const agent = this.agents.get(agentId);
+    if (agent) {
+      agent.activeSessions.add(sessionId);
+    }
+  }
+
+  /** Remove a session assignment from an agent. */
+  unassignSession(agentId: string, sessionId: string): void {
+    const agent = this.agents.get(agentId);
+    if (agent) {
+      agent.activeSessions.delete(sessionId);
+    }
+  }
+
+  /** Get all active session IDs for an agent. */
+  getActiveSessions(agentId: string): string[] {
+    return Array.from(this.agents.get(agentId)?.activeSessions ?? []);
+  }
+
+  /** Check if an agent is configured as persistent. */
+  isPersistent(agentId: string): boolean {
+    return this.agents.get(agentId)?.connectionMode === 'persistent';
   }
 
   /** Mark an agent as connected. */
@@ -80,6 +154,8 @@ export class AgentRegistry {
       role: a.config.role,
       connected: a.connected,
       lastSeen: a.lastSeen?.toISOString() ?? null,
+      connectionMode: a.connectionMode,
+      activeSessions: Array.from(a.activeSessions),
     }));
   }
 

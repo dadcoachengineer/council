@@ -106,7 +106,17 @@ export function createApp(opts: CreateAppOptions): CouncilApp {
   app.use(express.json({ limit: '1mb' }));
 
   // MCP endpoint (no auth — agents use their own token-based auth)
-  app.use('/mcp', createMcpRouter(orchestrator));
+  const { router: mcpRouter, notifyAgent } = createMcpRouter(orchestrator);
+  app.use('/mcp', mcpRouter);
+
+  // Wire persistent agent notification callback
+  orchestrator.setNotifyPersistentAgent(notifyAgent);
+
+  // Load persistent tokens from DB
+  const persistentTokens = store.listPersistentTokens(councilId);
+  for (const { agentId, token } of persistentTokens) {
+    agentRegistry.setPersistentToken(agentId, token);
+  }
 
   // ── Auth ──
   const auth = createAuth(userStore);

@@ -102,6 +102,14 @@ export const userSessions = sqliteTable('user_sessions', {
   createdAt: text('created_at').notNull(),
 });
 
+export const agentTokens = sqliteTable('agent_tokens', {
+  agentId: text('agent_id').primaryKey(),
+  councilId: text('council_id').notNull(),
+  token: text('token').notNull(),
+  createdAt: text('created_at').notNull(),
+  lastUsedAt: text('last_used_at'),
+});
+
 export const events = sqliteTable('events', {
   id: text('id').primaryKey(),
   councilId: text('council_id').notNull(),
@@ -249,6 +257,16 @@ export function createDb(dbPath: string): { db: DbClient; sqlite: BetterSqlite3.
       expires_at TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS agent_tokens (
+      agent_id TEXT PRIMARY KEY,
+      council_id TEXT NOT NULL,
+      token TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      last_used_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_agent_tokens_token ON agent_tokens(token);
 
     CREATE TABLE IF NOT EXISTS escalation_events (
       id TEXT PRIMARY KEY,
@@ -438,6 +456,44 @@ export class DbStore implements OrchestratorStore {
       .where(eq(escalationEvents.sessionId, sessionId))
       .orderBy(escalationEvents.createdAt)
       .all() as EscalationEvent[];
+  }
+
+  // ── Agent Tokens (persistent) ──
+
+  savePersistentToken(agentId: string, councilId: string, token: string): void {
+    this.db.insert(agentTokens).values({
+      agentId,
+      councilId,
+      token,
+      createdAt: new Date().toISOString(),
+    }).onConflictDoUpdate({
+      target: agentTokens.agentId,
+      set: { token, councilId },
+    }).run();
+  }
+
+  getPersistentToken(agentId: string): { token: string; lastUsedAt: string | null } | null {
+    const rows = this.db.select().from(agentTokens).where(eq(agentTokens.agentId, agentId)).all();
+    if (rows.length === 0) return null;
+    return { token: rows[0].token, lastUsedAt: rows[0].lastUsedAt };
+  }
+
+  updateTokenLastUsed(agentId: string): void {
+    this.db.update(agentTokens)
+      .set({ lastUsedAt: new Date().toISOString() })
+      .where(eq(agentTokens.agentId, agentId))
+      .run();
+  }
+
+  deletePersistentToken(agentId: string): void {
+    this.db.delete(agentTokens).where(eq(agentTokens.agentId, agentId)).run();
+  }
+
+  listPersistentTokens(councilId: string): Array<{ agentId: string; token: string }> {
+    return this.db.select({
+      agentId: agentTokens.agentId,
+      token: agentTokens.token,
+    }).from(agentTokens).where(eq(agentTokens.councilId, councilId)).all();
   }
 
   listEvents(councilId?: string, limit = 50): IncomingEvent[] {

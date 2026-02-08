@@ -12,6 +12,7 @@ import type {
   DecisionOutcome,
   EscalationEvent,
   AmendmentStatus,
+  SessionAssignment,
 } from '../shared/types.js';
 import type { WebhookEvent } from '../shared/events.js';
 import { EventRouter, type RouteResult } from './event-router.js';
@@ -30,7 +31,8 @@ export type OrchestratorEvent =
   | { type: 'vote:cast'; vote: Vote }
   | { type: 'decision:pending_review'; decision: Decision }
   | { type: 'event:received'; event: IncomingEvent }
-  | { type: 'escalation:triggered'; event: EscalationEvent };
+  | { type: 'escalation:triggered'; event: EscalationEvent }
+  | { type: 'agent:session_assigned'; agentId: string; sessionId: string };
 
 export type OrchestratorListener = (event: OrchestratorEvent) => void;
 
@@ -74,6 +76,7 @@ export class Orchestrator {
   private listeners = new Set<OrchestratorListener>();
   private mcpBaseUrl: string;
   private escalationEngine: EscalationEngine | null = null;
+  private notifyPersistentAgent?: (agentId: string, assignment: SessionAssignment) => Promise<boolean>;
 
   constructor(opts: {
     config: CouncilConfig;
@@ -468,6 +471,10 @@ export class Orchestrator {
     this.escalationEngine = engine;
   }
 
+  setNotifyPersistentAgent(fn: (agentId: string, assignment: SessionAssignment) => Promise<boolean>): void {
+    this.notifyPersistentAgent = fn;
+  }
+
   createEscalatedDecision(sessionId: string, reason: string, event: EscalationEvent): Decision {
     this.store.saveEscalationEvent(event);
     this.emit({ type: 'escalation:triggered', event });
@@ -659,7 +666,31 @@ export class Orchestrator {
       return;
     }
 
+    // Track session assignment
+    this.agentRegistry.assignSession(agentId, sessionId);
+
+    // For persistent agents that are already connected, try to notify instead of re-spawning
+    if (this.agentRegistry.isPersistent(agentId) && this.agentRegistry.isConnected(agentId) && this.notifyPersistentAgent) {
+      const session = this.store.getSession(sessionId);
+      const assignment: SessionAssignment = {
+        sessionId,
+        role: session?.leadAgentId === agentId ? 'lead' : 'consulted',
+        context,
+      };
+
+      try {
+        const notified = await this.notifyPersistentAgent(agentId, assignment);
+        if (notified) {
+          this.emit({ type: 'agent:session_assigned', agentId, sessionId });
+          return;
+        }
+      } catch (err) {
+        console.warn(`[ORCHESTRATOR] Failed to notify persistent agent ${agentId}, falling through to spawn: ${(err as Error).message}`);
+      }
+    }
+
     const token = this.agentRegistry.generateToken(agentId);
+    const connectionMode = this.agentRegistry.isPersistent(agentId) ? 'persistent' : 'per_session';
 
     try {
       await this.spawner.spawn({
@@ -668,6 +699,7 @@ export class Orchestrator {
         context,
         councilMcpUrl: this.mcpBaseUrl,
         agentToken: token,
+        connectionMode,
       });
     } catch (err) {
       console.error(`[ORCHESTRATOR] Failed to spawn agent ${agentId}: ${(err as Error).message}`);

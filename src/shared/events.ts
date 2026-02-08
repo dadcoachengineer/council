@@ -12,7 +12,8 @@ export type WsEvent =
   | { type: 'event:received'; event: IncomingEvent }
   | { type: 'escalation:triggered'; event: EscalationEvent }
   | { type: 'agent:connected'; agentId: string }
-  | { type: 'agent:disconnected'; agentId: string };
+  | { type: 'agent:disconnected'; agentId: string }
+  | { type: 'agent:session_assigned'; agentId: string; sessionId: string };
 
 // ── Webhook event types ──
 
